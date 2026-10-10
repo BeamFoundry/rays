@@ -1,0 +1,8 @@
+test:
+  props:
+    favorites:
+      book:
+        title: "Germinal"
+        author: "Emile Zola"
+        pages: 2783
+        released: true

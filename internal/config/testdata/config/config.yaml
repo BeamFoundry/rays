@@ -1,0 +1,6 @@
+favorite:
+  book:
+    title: "Les Miserables"
+    author: "Victor Hugo"
+    pages: 2783
+    released: true

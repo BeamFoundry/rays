@@ -1,0 +1,6 @@
+favorite:
+  book:
+    title: "Germinal"
+    author: "Emile Zola"
+    pages: 562
+    released: true
