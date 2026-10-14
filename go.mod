@@ -6,7 +6,7 @@ require (
 	github.com/go-playground/locales v0.14.2
 	github.com/go-playground/universal-translator v0.18.2
 	github.com/go-playground/validator/v10 v10.30.5
-	github.com/onsi/ginkgo/v2 v2.28.3
+	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.40.0
 	github.com/timandy/routine v1.1.5
 	golang.org/x/tools v0.51.0
