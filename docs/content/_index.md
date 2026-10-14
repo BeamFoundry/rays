@@ -14,9 +14,9 @@ and interfaces. It eliminates boilerplate wiring, enforces clean boundaries, and
 highly testable.
 
 ### Comprehensive Guide
-1. [Introduction & Philosophy](/docs/1-introduction/)
-2. [Quickstart](/docs/2-quickstart/)
-3. [IoC Container](/docs/3-ioc-container/)
-4. [Logging](/docs/4-logging/)
-5. [Language Helpers](/docs/5-language-helpers/)
-6. [Testing](/docs/6-testing/)
+1. [Introduction & Philosophy](/rays/docs/1-introduction/)
+2. [Quickstart](/rays/docs/2-quickstart/)
+3. [IoC Container](/rays/docs/3-ioc-container/)
+4. [Logging](/rays/docs/4-logging/)
+5. [Language Helpers](/rays/docs/5-language-helpers/)
+6. [Testing](/rays/docs/6-testing/)

@@ -290,9 +290,16 @@ type ContainerConfiguration interface {
 	Run()
 }
 
-// Represent a TransactionManager for a <T> type.
-type TxManager[T any] interface {
+// Transactional represent a transaction provider for a <T> type.
+type Transactional[T any] interface {
 	Start(context.Context) *T
+	Transactional(ctx context.Context, action func(*T) Error)
 	Get() *T
 	End()
+}
+
+// Manager is a marker interface to differentiate a provider of a component type and
+// a manager which proxy for many component of that type.
+type Manager interface {
+	_Manager()
 }

@@ -1,10 +1,14 @@
 # BeamFoundry Rays 🚀
 
+**This is an extract of the full documentation available at [rays.bdfy.dev](https://rays.bfdy.dev/rays/).**
+
 **Rays** is a powerful, enterprise-grade Dependency Injection (DI) and Inversion of Control (IoC) framework for Go, built by **BeamFoundry**.
 
-Inspired by mature ecosystems like Spring Boot, Rays brings structured lifecycles, annotation-driven configuration, and robust dependency wiring to Go, while respecting Go's idiomatic use of composition and interfaces. It eliminates boilerplate wiring, enforces clean boundaries, and makes your Go applications highly testable.
+Inspired by mature ecosystems like Spring Boot, Rays brings structured lifecycles, annotation-driven configuration, and robust dependency wiring
+to Go, while respecting Go's idiomatic use of composition and interfaces. It eliminates boilerplate wiring, enforces clean boundaries, and makes
+your Go applications highly testable.
 
-## Introduction & Philosophy
+## Introduction and Philosophy
 
 Go is famous for its simplicity and explicit dependency passing. However, as Go applications scale to hundreds of services, repositories, and cross-cutting concerns, manual wiring (often done in massive `init()` functions or `main.go`) becomes fragile and difficult to maintain.
 
@@ -107,7 +111,7 @@ func main() {
 }
 ```
 
-## Stereotypes & Beams
+## Stereotypes and Beams
 
 In Rays, a "Beam" is any object managed by the IoC container.
 You declare a struct as a Beam by embedding a **Stereotype**.
@@ -229,7 +233,7 @@ type OrderService struct {
 Idiomatic Go encourages hiding internal state. Rays uses reflection to inject into private fields,
 meaning your dependencies aren't exposed to other packages.
 
-### Qualifier & Primary (Resolving Ambiguity)
+### Qualifier and Primary (Resolving Ambiguity)
 
 If you have multiple Beams of the same type, the container will panic with an ambiguity error.
 Use `Qualifier` to differentiate them, and `Primary` to set a default fallback.
@@ -295,7 +299,7 @@ type ServerEvaluator struct {
 }
 
 // Ensute type is compiled in.
-var _, _ = any(&ServerEvaluator{}).(BeamAttributeEvaluator)
+var _, _ = any(andServerEvaluator{}).(BeamAttributeEvaluator)
 
 // Ensure interface
 var _ BeamAttributeEvaluator = &ServerEvaluator{}
@@ -367,7 +371,7 @@ func (m *MetricsService) Report() {
 }
 ```
 
-### Multi-Binding (Slices & Maps)
+### Multi-Binding (Slices and Maps)
 
 Advanced architectural patterns (like the Strategy Pattern) rely on injecting *multiple* implementations of an interface or struct. Rays natively supports multi-binding into slices and maps for both interface types and struct pointers.
 
@@ -461,7 +465,7 @@ func (d *NotificationDispatcher) Dispatch (serverName string) {
 }
 ```
 
-## Configuration & Profiles
+## Configuration and Profiles
 
 In enterprise applications, configuration and environment management go hand-in-hand.
 
