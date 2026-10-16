@@ -8,7 +8,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/onsi/ginkgo/v2 v2.28.3
 	github.com/onsi/gomega v1.40.0
-	github.com/timandy/routine v1.1.5
+	github.com/timandy/routine v1.1.6
 	golang.org/x/tools v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
 )
