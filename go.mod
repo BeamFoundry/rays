@@ -1,6 +1,6 @@
 module github.com/BeamFoundry/rays
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/go-playground/locales v0.14.2
