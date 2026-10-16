@@ -24,7 +24,7 @@ var _ BeamConditionEvaluator = &ConditionalOnProfileEvaluator{}
 
 func (this *ConditionalOnProfileEvaluator) Profile() string {
 	field := FindFieldWithAnnotation[ConditionalOnProfile](this.reflectType)
-	return GetFieldFirstTag(field, []string{"Name", "Profile", "Profiles"})
+	return GetFieldFirstTag(field, []string{NameAttribute, "Profile", "Profiles"})
 }
 
 func (this *ConditionalOnProfileEvaluator) EvaluateBeamCondition(beam Beam, environment InitializingContext) bool {
@@ -57,7 +57,7 @@ var _ BeamConditionEvaluator = &ConditionalOnPropertyEvaluator{}
 
 func (this *ConditionalOnPropertyEvaluator) Name() string {
 	if field := FindFieldWithAnnotation[ConditionalOnProperty](this.reflectType); field != nil {
-		if name, ok := field.Tag.Lookup("Name"); ok {
+		if name, ok := field.Tag.Lookup(NameAttribute); ok {
 			return name
 		}
 	}

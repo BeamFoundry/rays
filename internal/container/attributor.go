@@ -4,6 +4,11 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/core"
 )
 
+// QualifierAttribute represents the attribute key used to identify a beam's qualifier.
+const QualifierAttribute = "Qualifier"
+
+const NameAttribute = "Name"
+
 type PrimaryEvaluator struct {
 	Primary
 }
@@ -28,7 +33,7 @@ var _ BeamAttributeEvaluator = &QualifierEvaluator{}
 // EvaluateBeamAttribute implements [BeamAttributeEvaluator].
 func (q *QualifierEvaluator) EvaluateBeamAttribute(beam Beam) string {
 	field := FindFieldWithAnnotation[Qualifier](beam.AnnotatedType())
-	return GetFieldFirstTag(field, []string{"_", "Name", "Qualifier"})
+	return GetFieldFirstTag(field, []string{"_", NameAttribute, QualifierAttribute})
 }
 
 type ServerEvaluator struct {

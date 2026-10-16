@@ -30,7 +30,7 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 	// TODO: Force it to be a singleton ???
 	parent = builder.Build()
 
-	logger.GetLogger().Debug("Evaluating registration beam with Configuration Stereotype", "beam", parent.Attributes()["Qualifier"], "methods", parent.Type().NumMethod())
+	logger.GetLogger().Debug("Evaluating registration beam with Configuration Stereotype", "beam", parent.Attributes()[QualifierAttribute], "methods", parent.Type().NumMethod())
 	for mt := range parent.Type().Methods() {
 		switch {
 		case mt.Type.NumOut() == 0 || mt.Type.NumOut() > 2:

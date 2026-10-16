@@ -239,7 +239,7 @@ func (this *Container) Initialize() Error {
 		for _, beam := range creatableBeams {
 			if err := this.CreateBeam(beam); err != nil {
 				if err.Name() == "InvalidBeamError" {
-					logger.GetLogger().Trace("Beam not yet createable", "message", err.Message(), "qualifier", beam.Attributes()["Qualifier"])
+					logger.GetLogger().Trace("Beam not yet createable", "message", err.Message(), "qualifier", beam.Attributes()[QualifierAttribute])
 				} else {
 					err.LogError()
 				}
@@ -266,7 +266,7 @@ func (this *Container) Initialize() Error {
 			err := NewError("BeamCreationError", fmt.Sprintf("Unable to create more beams, %d remaining", len(creatableBeams)))
 			err.LogError()
 			for _, beam := range creatableBeams {
-				logger.GetLogger().Error("BeamCreationError: Beam not created", "qualifier", beam.Attributes()["Qualifier"], "type", beam.Type())
+				logger.GetLogger().Error("BeamCreationError: Beam not created", "qualifier", beam.Attributes()[QualifierAttribute], "type", beam.Type())
 			}
 			return err
 		}
@@ -278,7 +278,7 @@ func (this *Container) Initialize() Error {
 		for _, beam := range this.GetAllBeams() {
 			instance := this.GetBeamDefaultInstance(beam)
 			if instance.Status() < Created {
-				err := NewError("BeamCreationError", fmt.Sprintf("Beam not created : %s, %v", beam.Attributes()["Qualifier"], beam.Type()))
+				err := NewError("BeamCreationError", fmt.Sprintf("Beam not created : %s, %v", beam.Attributes()[QualifierAttribute], beam.Type()))
 				err.LogError()
 				return err
 			}
@@ -316,7 +316,7 @@ func (this *Container) Initialize() Error {
 		for _, beam := range this.GetAllBeams() {
 			instance := this.GetBeamDefaultInstance(beam)
 			if instance.Status() < Injected {
-				err := NewError("BeamInjectError", fmt.Sprintf("Beam not injected : %s, %v", beam.Attributes()["Qualifier"], beam.Type()))
+				err := NewError("BeamInjectError", fmt.Sprintf("Beam not injected : %s, %v", beam.Attributes()[QualifierAttribute], beam.Type()))
 				err.LogError()
 				return err
 			}
@@ -392,7 +392,7 @@ func (this *Container) Initialize() Error {
 	for _, beam := range this.GetAllBeams() {
 		instance := this.GetBeamDefaultInstance(beam)
 		if instance.Status().Compare(InstanceStatus{}.New().INITIALIZED) != 0 {
-			return NewError("InitializationError", fmt.Sprintf("Beam not initialized : %s, %v", beam.Attributes()["Qualifier"], beam.Type()))
+			return NewError("InitializationError", fmt.Sprintf("Beam not initialized : %s, %v", beam.Attributes()[QualifierAttribute], beam.Type()))
 		}
 	}
 
@@ -409,10 +409,10 @@ func (this *Container) filterConditionalBeams() {
 				continue
 			}
 			if condition := this.GetBeamCondition(beam, includePostEvent); condition != nil && !condition.EvaluateBeamCondition(beam, this) {
-				logger.GetLogger().Debug("Removing (parent) beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()["Qualifier"])
+				logger.GetLogger().Debug("Removing (parent) beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
 				this.UnregisterBeam(beam)
 				for _, child := range this.GetBeamChildren(beam) {
-					logger.GetLogger().Debug("Removing (child) beam has its condition evaluates to false", "type", child.Type(), "qualifier", child.Attributes()["Qualifier"])
+					logger.GetLogger().Debug("Removing (child) beam has its condition evaluates to false", "type", child.Type(), "qualifier", child.Attributes()[QualifierAttribute])
 					this.UnregisterBeam(child)
 				}
 			}
@@ -424,7 +424,7 @@ func (this *Container) filterConditionalBeams() {
 				continue
 			}
 			if condition := this.GetBeamCondition(beam, includePostEvent); condition != nil && !condition.EvaluateBeamCondition(beam, this) {
-				logger.GetLogger().Debug("Removing child beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()["Qualifier"])
+				logger.GetLogger().Debug("Removing child beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
 				this.UnregisterBeam(beam)
 			}
 		}

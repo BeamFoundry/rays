@@ -44,7 +44,8 @@ var _ = Describe("Register", func() {
 		Expect(err).NotTo(HaveOccurred())
 		beam := GetContainer().FindBeamsByAttributes(
 			reflect.TypeFor[*BeamWithValue](),
-			map[string]string{"Primary": "primary", "Qualifier": "beamWithValue"})
+			map[string]string{"Primary": "primary", "Qualifier": "beamWithValue"},
+		)
 		Expect(beam).To(HaveLen(1))
 		instance := GetBeamDefaultInstance[*BeamWithValue]()
 		Expect(instance.GetValue()).To(Equal("test"))

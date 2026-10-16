@@ -40,7 +40,7 @@ func (this *Instance) Create(ctx context.Context) Error {
 	if this.status.Compare(InstanceStatus{}.New().CREATED) >= 0 {
 		return NewError("InstanceError", "Instance already created")
 	}
-	this.logger.Trace("Creating", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+	this.logger.Trace("Creating", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 	instance, err := this.beam.Foundry()(ctx)
 	if err != nil {
 		return err
@@ -51,7 +51,7 @@ func (this *Instance) Create(ctx context.Context) Error {
 	}
 	this.instance = instance
 	this.status = InstanceStatus{}.New().CREATED
-	this.logger.Trace("Created", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+	this.logger.Trace("Created", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 	return nil
 }
 
@@ -65,7 +65,7 @@ func (this *Instance) Inject() Error {
 		return err
 	}
 	this.status = InstanceStatus{}.New().INJECTED
-	this.logger.Trace("Injected", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+	this.logger.Trace("Injected", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 	return nil
 }
 
@@ -99,7 +99,7 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 	if err != nil && err.Name() == "InvalidParameter" {
 		return nil
 	}
-	this.logger.Trace("Evaluating field", "field.Name", field.Name, "qualifier", this.beam.Attributes()["Qualifier"])
+	this.logger.Trace("Evaluating field", "field.Name", field.Name, "qualifier", this.beam.Attributes()[QualifierAttribute])
 	switch field.Type.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		// TODO: Verify this is still needed
@@ -133,7 +133,7 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 		value := UnprotectValue(valueOf)
 		m := reflect.MakeMap(field.Type)
 		af := NewAnnotationField(field)
-		groupBy := "Qualifier"
+		groupBy := QualifierAttribute
 		if af.Options()["GroupBy"] != "" {
 			groupBy = af.Options()["GroupBy"]
 		}
@@ -205,7 +205,7 @@ func (this *Instance) Initialize() Error {
 
 	if this.beam.Type().Kind() == reflect.Interface && GetContainer().IsChildBeam(this.beam) {
 		this.status = InstanceStatus{}.New().INITIALIZED
-		this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+		this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 		return nil
 	}
 	for i := range this.beam.Type().Elem().NumField() {
@@ -215,7 +215,7 @@ func (this *Instance) Initialize() Error {
 				if err := inner.PostConstruct(this.instance); err != nil {
 					return err
 				}
-				this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type(), "field", field.Name)
+				this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 			}
 		}
 	}
@@ -224,7 +224,7 @@ func (this *Instance) Initialize() Error {
 		if err := post.PostConstruct(); err != nil {
 			return err
 		}
-		this.logger.Debug("Initialized", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+		this.logger.Debug("Initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 	}
 
 	this.status = InstanceStatus{}.New().INITIALIZED
@@ -242,7 +242,7 @@ func (this *Instance) InitializeWithParent(parent any) Error {
 
 		if this.beam.Type().Kind() == reflect.Interface && GetContainer().IsChildBeam(this.beam) {
 			this.status = InstanceStatus{}.New().INITIALIZED
-			this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type())
+			this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
 			return nil
 		}
 	*/
@@ -253,7 +253,7 @@ func (this *Instance) InitializeWithParent(parent any) Error {
 				if err := inner.PostConstruct(parent); err != nil {
 					return err
 				}
-				this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()["Qualifier"], "type", this.beam.Type(), "field", field.Name)
+				this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 			}
 		}
 	}

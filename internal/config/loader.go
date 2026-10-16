@@ -20,7 +20,7 @@ var _ ConfigurationParser = &YamlConfigFSLoader{}
 
 // TODO : Replace configHolder and defaultConfig with a func() ???
 
-//nolint:errcheck,revive // Needed for walkDir
+//nolint:errcheck // Needed for walkDir
 func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string)) {
 	fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, _ error) error {
 		if !entry.Type().IsRegular() {
@@ -38,19 +38,6 @@ func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader 
 			if err := yaml.Unmarshal(data, &config); err == nil {
 				logger.GetLogger().Info("Loading configuration", "path", path, "profile", m[1])
 				loader(config, m[1])
-				/*
-					if m[1] == "" {
-						if defaultConfig {
-							logger.GetLogger().Info("Loading default configuration", "path", path)
-							configHolder.LoadDefaultConfig(config)
-						} else {
-							logger.GetLogger().Info("Loading configuration", "path", path)
-							configHolder.LoadConfig(config)
-						}
-					} else {
-						configHolder.LoadConfigForProfile(config, m[1])
-					}
-				*/
 			}
 		}
 		return nil

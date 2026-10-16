@@ -120,7 +120,7 @@ func (this *LoggingConfiguration) PostConstruct() Error {
 //nolint:contextcheck //TODO: I should remove this check.
 func (this *LoggingConfiguration) Logger(ctx context.Context) Logging {
 	if ct := ctx.Value(PrototypeContextParentType); ct != nil {
-		if rt, ok := (ct).(reflect.Type); ok {
+		if rt, ok := ct.(reflect.Type); ok {
 			if rt.Kind() == reflect.Pointer {
 				rt = rt.Elem()
 			}

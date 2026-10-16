@@ -148,16 +148,16 @@ var _ = Describe("Locales", func() {
 		fnMap := localeFuncMap.FuncMap()
 		Expect(fnMap).NotTo(BeEmpty())
 
-		if translate, ok := (fnMap["translate"]).(func(key string, params ...string) (string, error)); ok {
+		if translate, ok := fnMap["translate"].(func(key string, params ...string) (string, error)); ok {
 			Expect(ValErr(translate("welcome"))).To(Equal("Bienvenue"))
 		}
-		if cardinal, ok := (fnMap["cardinal"]).(func(key string, num float64) (string, error)); ok {
+		if cardinal, ok := fnMap["cardinal"].(func(key string, num float64) (string, error)); ok {
 			Expect(ValErr(cardinal("days.left", 2))).To(Equal("2 jours restant"))
 		}
-		if ordinal, ok := (fnMap["ordinal"]).(func(key string, num float64) (string, error)); ok {
+		if ordinal, ok := fnMap["ordinal"].(func(key string, num float64) (string, error)); ok {
 			Expect(ValErr(ordinal("price", 2))).To(Equal("2eme prix"))
 		}
-		if ranges, ok := (fnMap["ranges"]).(func(key string, num1, num2 float64) (string, error)); ok {
+		if ranges, ok := fnMap["ranges"].(func(key string, num1, num2 float64) (string, error)); ok {
 			Expect(ValErr(ranges("days.range", 1, 2))).To(Equal("1-2 jours"))
 		}
 	})

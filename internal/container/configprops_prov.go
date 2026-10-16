@@ -23,7 +23,7 @@ func (this *ConfigurationPropertiesBeamProvider) ProvideBeam(reflectType reflect
 	foundry := func(context.Context) (any, Error) {
 		ptr := reflect.New(reflectType.Elem()).Interface()
 		if field := FindFieldWithAnnotation[ConfigurationProperties](reflectType); field != nil {
-			if path, ok := field.Tag.Lookup("Name"); ok && path != "" {
+			if path, ok := field.Tag.Lookup(NameAttribute); ok && path != "" {
 				if err := container.ConfigUnmarshall(path, ptr); err != nil {
 					if err.Name() == "KeyNotFoundError" {
 						return ptr, nil
