@@ -53,6 +53,10 @@ type BookElemsMapStringPointer struct {
 	books map[string]*string
 }
 
+type BookElemsMap struct {
+	books []map[string]string
+}
+
 type TranslationMap struct {
 	en map[string]string
 	fr map[string]string
@@ -115,6 +119,25 @@ var _ = Describe("config", func() {
 				"Les Miserables": "Victor Hugo",
 				"Germinal":       "Emile Zola",
 				"Nil":            nil,
+			},
+		},
+	}
+
+	favoritesListElems := map[string]any{
+		"favorites": map[string]any{
+			"books": []any{
+				map[string]any{"Les Miserables": "Victor Hugo"},
+				map[string]any{"Germinal": "Emile Zola"},
+			},
+		},
+	}
+
+	favoritesListElemsTitles := map[string]any{
+		"favorites": map[string]any{
+			"books": []any{
+				map[string]any{"Les Miserables": "Victor Hugo"},
+				map[string]any{"Germinal": "Emile Zola"},
+				map[string]any{"Nil": nil},
 			},
 		},
 	}
@@ -263,6 +286,18 @@ var _ = Describe("config", func() {
 		c := config.NewConfigFor(favorites)
 		Expect(c.Unmarshal(elems)).NotTo(HaveOccurred())
 		Expect(elems.favorites["books"]).To(HaveKey("Les Miserables"))
+	})
+	It("can load an object using slice of maps", func() {
+		elems := &BookElemsMap{}
+		c := config.NewConfigFor(favoritesListElems)
+		Expect(c.AddOverride("favorites.books.[1].germinal", "emile zola")).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+		Expect(elems.books[0]["Les Miserables"]).To(Equal("Victor Hugo"))
+		Expect(elems.books[1]["Germinal"]).To(Equal("emile zola"))
 	})
 	It("can duplicate default config", func() {
 		elems := &BookElemsMapObject{}
@@ -529,6 +564,14 @@ var _ = Describe("config", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(subkey.Unmarshal(elems)).To(HaveOccurred())
 		})
+		It("On slice of maps", func() {
+			elems := &BookElemsMap{}
+			c := config.NewConfigFor(favoritesListElemsTitles)
+			Expect(c.InitConfig()).NotTo(HaveOccurred())
+			subkey, err := c.GetSubConfig("favorites")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subkey.Unmarshal(elems)).To(HaveOccurred())
+		})
 		It("On slice of element", func() {
 			c := config.NewConfigFor(map[string]any{
 				"data": map[string]any{
@@ -617,6 +660,15 @@ var _ = Describe("config", func() {
 		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
 	})
 
+	It("will not error if a key is not a slice of maps", func() {
+		elems := &BookElemsMap{}
+		c := config.NewConfigFor(favoritesTitles)
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+	})
 	It("can error if validation fails", func() {
 		c := config.NewConfigFor(lesmis)
 		Expect(c.LoadConfigAt(map[string]any{"pages": 0}, "favorite.book")).NotTo(HaveOccurred())

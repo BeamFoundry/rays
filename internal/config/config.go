@@ -464,7 +464,7 @@ func (this *Config) unmarshal(obj any) Error {
 		}
 
 		val, err := Convert(elem, t)
-		if err != nil && err.Name() != "ConversionError" {
+		if err != nil && err.Name() != "ConvertionError" {
 			return value, err
 		}
 		if rt.Kind() == reflect.Pointer {
@@ -521,6 +521,38 @@ func (this *Config) unmarshal(obj any) Error {
 						return err
 					}
 					slice = reflect.Append(slice, e.Elem())
+				} else if field.Type.Elem().Kind() == reflect.Map {
+					c, ok := v.(map[string]any)
+					if !ok {
+						continue
+					}
+					s := NewConfig()
+					s.config.PutAll(NewHashMapFor(c))
+					prefix := String(key).ToLowerCase().String() + ".[" + strconv.Itoa(i) + "]."
+					for k, v := range this.overrides.Iterator() {
+						if p := String(k); p.StartsWith(prefix) {
+							o := Strings(p).TrimPrefix(prefix)
+							s.overrides.Put(o, v)
+						}
+					}
+					m := reflect.MakeMapWithSize(field.Type.Elem(), s.config.Size())
+
+					for k, v := range s.config.Iterator() {
+						kval := reflect.ValueOf(k)
+						if kv, err := convert(k, field.Type.Elem().Key()); err == nil {
+							kval = kv
+						}
+						override := String(k).ToLowerCase().String()
+						if o, ok := s.overrides.Get(override).Get(); ok {
+							v = o
+						}
+						val, err := convert(v, field.Type.Elem().Elem())
+						if err != nil {
+							return err
+						}
+						m.SetMapIndex(kval, val)
+					}
+					slice = reflect.Append(slice, m)
 				} else if val, err := convert(v, field.Type.Elem()); err != nil {
 					return err
 				} else {

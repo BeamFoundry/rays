@@ -11,6 +11,9 @@ import (
 
 // Convert returns a reflect.Value from an "any" value cast according to a reflect.Type
 func Convert(value any, t reflect.Type) (reflect.Value, Error) {
+	if value == nil && t.Kind() != reflect.Pointer {
+		return reflect.Value{}, NewError("NilError", "Unable to convert pointer")
+	}
 	if reflect.TypeOf(value).AssignableTo(t) {
 		return reflect.ValueOf(value), nil
 	}
@@ -77,7 +80,7 @@ func Convert(value any, t reflect.Type) (reflect.Value, Error) {
 		case reflect.Float64:
 			return valueOf(ConvertStringNumeric[float64](val))
 		default:
-			return reflect.Value{}, NewError("ConversionError", "Unable to convert from string")
+			return reflect.Value{}, NewError("ConvertionError", "Unable to convert from string")
 		}
 	} else if t.Kind() == reflect.String {
 		switch reflect.TypeOf(value).Kind() {
@@ -108,10 +111,10 @@ func Convert(value any, t reflect.Type) (reflect.Value, Error) {
 		case reflect.Float64:
 			return reflect.ValueOf(ConvertNumericString(value.(float64))), nil
 		default:
-			return reflect.Value{}, NewError("ConversionError", "Unable to convert to string")
+			return reflect.Value{}, NewError("ConvertionError", "Unable to convert to string")
 		}
 	}
-	return reflect.Value{}, NewError("ConversionError", "Not a valid Type Conversion")
+	return reflect.Value{}, NewError("ConvertionError", "Not a valid Type Conversion")
 }
 
 func ConvertNumeric[T2, T1 IntegerConstraint | FloatConstraint](value T1) T2 {
