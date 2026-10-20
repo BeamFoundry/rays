@@ -1,6 +1,6 @@
 # BeamFoundry Rays 🚀
 
-[![beamfoundry](https://rays.bfdy.dev/rays-bfdy.jpeg)](https://rays.bfdy.dev/rays/)
+[![beamfoundry](https://rays.bfdy.dev/rays-bfdy.jpeg)](https://rays.bfdy.dev/)
 
 [![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Code Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)]()
