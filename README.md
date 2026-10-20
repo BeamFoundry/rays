@@ -3,7 +3,7 @@
 [![beamfoundry](https://rays.bfdy.dev/rays-bfdy.jpeg)](https://rays.bfdy.dev/)
 
 [![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://golang.org)
-[![Code Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)]()
+[![codecov](https://codecov.io/gh/BeamFoundry/rays/graph/badge.svg?token=KASD3RXOYT)](https://codecov.io/gh/BeamFoundry/rays)
 
 **This is an extract of the full documentation available at [rays.bdfy.dev](https://rays.bfdy.dev/rays/).**
 
