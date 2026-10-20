@@ -63,12 +63,9 @@ func ReduceFunctionName(function string) string {
 
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
-		if len(info.Deps) == 0 {
-			info.Deps = []*debug.Module{{Path: "github.com/BeamFoundry/rays"}}
-		}
+		moduleCache[info.Main.Path] = reducePkgElements(strings.Split(info.Main.Path, "/"))
 		for _, dep := range info.Deps {
-			dom := reducePkgElements(strings.Split(dep.Path, "/"))
-			moduleCache[dep.Path] = dom
+			moduleCache[dep.Path] = reducePkgElements(strings.Split(dep.Path, "/"))
 		}
 	}
 }
