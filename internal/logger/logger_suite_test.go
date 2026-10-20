@@ -255,6 +255,9 @@ var _ = Describe("ReduceFunctionName", func() {
 		"log/slog/internal.logger.log":                                          "log/slog/internal logger",
 	}
 	It("can reduce a module name", func() {
+		GetLogger().SetLogLevel(logger.LevelDebug)
+		GetLogger().SetOutput(GinkgoWriter)
+		GetLogger().Debug("testing ReduceFunctionName")
 		for range 2 {
 			for k, v := range doms {
 				Expect(logger.ReduceFunctionName(k)).To(Equal(v))

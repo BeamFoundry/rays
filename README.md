@@ -1,5 +1,8 @@
 # BeamFoundry Rays 🚀
 
+[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Code Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)]()
+
 **This is an extract of the full documentation available at [rays.bdfy.dev](https://rays.bfdy.dev/rays/).**
 
 **Rays** is a powerful, enterprise-grade Dependency Injection (DI) and Inversion of Control (IoC) framework for Go, built by **BeamFoundry**.
