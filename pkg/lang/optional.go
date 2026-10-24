@@ -29,9 +29,7 @@ func OptionalEmpty[T any]() Optional[T] {
 //	opt.IsPresent() // returns false
 func OptionalOf[T any](value T) Optional[T] {
 	opt := Optional[T]{}
-	if err := opt.SetValue(value); err != nil {
-		return OptionalEmpty[T]()
-	}
+	opt.SetValue(value)
 	return opt
 }
 
@@ -51,20 +49,40 @@ func OptionalOf[T any](value T) Optional[T] {
 //	opt.IsPresent() // returns false
 func OptionalOfNullable[T any](value any) Optional[T] {
 	opt := Optional[T]{}
-	if err := opt.SetValue(value); err != nil {
+	if err := opt.SetAnyValue(value); err != nil {
 		return OptionalEmpty[T]()
 	}
 	return opt
 }
 
-// Type() returns a [reflect.Type] of T
-func (this Optional[T]) Type() reflect.Type {
+// ValueType() returns a [reflect.ValueType] of T
+func (this Optional[T]) ValueType() reflect.Type {
 	return reflect.TypeFor[T]()
 }
 
-// SetValue() let's you set the value of T
-func (this *Optional[T]) SetValue(value any) Error {
-	var err Error
+// SetValue() let's you set the value of T, if the value passed is not nil.
+func (this *Optional[T]) SetValue(value T) {
+	if this.isValid(value) {
+		this.value = value
+		this.present = true
+	}
+}
+
+// SetAnyValue() let's you set the value of T, if the value passed is correct.
+func (this *Optional[T]) SetAnyValue(value any) Error {
+	if !this.isValid(value) {
+		return NewError("InvalidValueError", "Provided value is nil")
+	}
+	if val, ok := value.(T); ok {
+		this.value = val
+		this.present = true
+		return nil
+	}
+	return NewError("WrongTypeError", "Generic wrong type")
+}
+
+func (this *Optional[T]) isValid(value any) bool {
+	var invalid bool
 	func() {
 		defer func() {
 			//nolint:errcheck // recover
@@ -72,17 +90,10 @@ func (this *Optional[T]) SetValue(value any) Error {
 		}()
 		v := reflect.ValueOf(value)
 		if !v.IsValid() || v.IsNil() {
-			err = NewError("InvalidValueError", "Provided value is nil")
+			invalid = true
 		}
 	}()
-	if err != nil {
-		return err
-	} else if val, ok := value.(T); ok {
-		this.value = val
-		this.present = true
-		return nil
-	}
-	return NewError("WrongTypeError", "Generic wrong type")
+	return !invalid
 }
 
 // Get() returns the value (or its zero value) and if it is present
