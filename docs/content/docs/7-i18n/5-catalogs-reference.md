@@ -5,13 +5,15 @@ weight: 5
 
 # Predefined Catalogs Reference
 
-The `github.com/BeamFoundry/rays/pkg/i18n/locales` package eliminates boilerplate by providing pre-instantiated singletons for standard locales and pre-registered validation translation functions.
+The `github.com/BeamFoundry/rays/pkg/i18n/locales` package eliminates boilerplate by providing pre-instantiated
+singletons for standard locales and pre-registered validation translation functions.
 
 ---
 
 ## Predefined Locales
 
-The `Locales` struct contains pre-instantiated [Go-Playground Locales](https://github.com/go-playground/locales) singletons for over 200 standard language and territory combinations.
+The `Locales` struct contains pre-instantiated [Go-Playground Locales](https://github.com/go-playground/locales)
+singletons for over 200 standard language and territory combinations.
 
 ### Common Locales
 
@@ -79,7 +81,8 @@ bundle := messageSource.NewMessageBundle(locales.Locales.DE)
 
 ## Predefined Validation Translations
 
-The `ValidationTranslations` struct provides ready-to-use registration functions that load built-in translation catalogs for Go-Playground Validator into a `LocaleMessageBundle`.
+The `ValidationTranslations` struct provides ready-to-use registration functions that load built-in translation catalogs
+for Go-Playground Validator into a `LocaleMessageBundle`.
 
 ### Loading Validation Translations
 

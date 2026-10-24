@@ -5,13 +5,16 @@ weight: 2
 
 # Container Configuration
 
-Rays integrates internationalization cleanly into its Inversion of Control (IoC) container. By declaring an i18n `Configuration` Beam, you can bind YAML configuration properties, configure default and auxiliary locales, load validator translation packs, and publish i18n services for injection throughout your application.
+Rays integrates internationalization cleanly into its Inversion of Control (IoC) container. By declaring an i18n
+`Configuration` Beam, you can bind YAML configuration properties, configure default and auxiliary locales, load
+validator translation packs, and publish i18n services for injection throughout your application.
 
 ---
 
 ## 1. Defining Configuration Properties
 
-First, define a struct embedding `ConfigurationProperties` to bind the `localization` section from your `application.yaml` file:
+First, define a struct embedding `ConfigurationProperties` to bind the `localization` section from your
+`application.yaml` file:
 
 ```go
 package config
@@ -28,13 +31,16 @@ type LocalizationProperties struct {
 }
 ```
 
-Rays automatically maps the YAML properties to the internal `LocalizedMessages` struct containing `translation`, `cardinal`, `ordinal`, and `ranges` maps.
+Rays automatically maps the YAML properties to the internal `LocalizedMessages` struct containing `translation`,
+`cardinal`, `ordinal`, and `ranges` maps.
 
 ---
 
 ## 2. The Localization Configuration Beam
 
-Next, define your `LocalizationConfig` struct embedding `Configuration`. During the container's `PostConstruct()` lifecycle hook, it initializes the `ThreadLocaleContextHolder`, creates the central `DefaultMessageSource`, and registers each supported locale:
+Next, define your `LocalizationConfig` struct embedding `Configuration`. During the container's `PostConstruct()`
+lifecycle hook, it initializes the `ThreadLocaleContextHolder`, creates the central `DefaultMessageSource`, and
+registers each supported locale:
 
 ```go
 package config
