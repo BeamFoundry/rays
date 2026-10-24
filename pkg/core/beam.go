@@ -5,7 +5,6 @@ import (
 	"reflect"
 
 	. "github.com/BeamFoundry/rays/pkg/lang"
-	. "github.com/BeamFoundry/rays/pkg/util"
 )
 
 // DefaultBeam is the default [Beam] implementation.
@@ -101,7 +100,7 @@ func NewBeamBuilder(ptr any) (*BeamBuilder, Error) {
 		return nil, NewError("InvalidType", "Bean must be a pointer to a struct")
 	}
 
-	builder.beam.attributes["Qualifier"] = CaseUtils(reflectType.Elem().Name()).Uncapitalize().String()
+	builder.beam.attributes["Qualifier"] = uncapitalize(reflectType.Elem().Name())
 
 	if field := FindFieldWithAnnotation[Prototype](reflectType); field != nil {
 		builder.beam.scope = BeamScope{}.New().PROTOTYPE
