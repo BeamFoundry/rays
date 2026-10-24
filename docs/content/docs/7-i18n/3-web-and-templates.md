@@ -5,9 +5,12 @@ weight: 3
 
 # Web & Template Integration
 
-Internationalized web applications must dynamically determine the user's preferred language for each incoming HTTP request without requiring developers to manually pass a locale or context parameter through every service, repository, and template call.
+Internationalized web applications must dynamically determine the user's preferred language for each incoming HTTP
+request without requiring developers to manually pass a locale or context parameter through every service, repository,
+and template call.
 
-Rays solves this using **`ThreadLocaleContextHolder`** for request-scoped locale management and **`LocaleFuncMap`** for seamless integration with Go's standard `html/template` package.
+Rays solves this using **`ThreadLocaleContextHolder`** for request-scoped locale management and **`LocaleFuncMap`** for
+seamless integration with Go's standard `html/template` package.
 
 ---
 
@@ -15,12 +18,15 @@ Rays solves this using **`ThreadLocaleContextHolder`** for request-scoped locale
 
 ### How It Works
 
-`ThreadLocaleContextHolder` is powered by thread-local storage (`routine.ThreadLocal`). When an HTTP request enters your application:
+`ThreadLocaleContextHolder` is powered by thread-local storage (`routine.ThreadLocal`). When an HTTP request enters your
+application:
 
 1. A middleware clears any leftover thread state by calling `holder.Clear()`.
-2. The middleware determines the desired locale from the request (URL query parameter, cookie, or `Accept-Language` header).
+2. The middleware determines the desired locale from the request (URL query parameter, cookie, or `Accept-Language`
+   header).
 3. The middleware sets the locale via `holder.Set(locale)`.
-4. All subsequent function calls on that goroutine—including validators, template renderers, and business services—automatically access that locale via `holder.Get()`.
+4. All subsequent function calls on that goroutine—including validators, template renderers, and business
+   services—automatically access that locale via `holder.Get()`.
 
 ### Writing an HTTP Middleware
 
@@ -74,7 +80,8 @@ func LocaleMiddleware(holder i18n.LocaleContextHolder) func(http.Handler) http.H
 
 ## 2. HTML Template Integration (`pkg/web`)
 
-Rays provides `LocaleFuncMap` in the `pkg/web` package, implementing the `FuncMapper` interface. It bridges the current `LocaleContextHolder` and `MessageSource` to Go's standard `html/template` engine.
+Rays provides `LocaleFuncMap` in the `pkg/web` package, implementing the `FuncMapper` interface. It bridges the current
+`LocaleContextHolder` and `MessageSource` to Go's standard `html/template` engine.
 
 ### Available Template Functions
 
@@ -117,7 +124,8 @@ func (r *TemplateRenderer) Render(w io.Writer, tmplPath string, data any) error 
 
 ### Writing Templates
 
-Because the template functions look up the current locale from `ThreadLocaleContextHolder` dynamically at execution time, your templates automatically render in the user's active language:
+Because the template functions look up the current locale from `ThreadLocaleContextHolder` dynamically at execution
+time, your templates automatically render in the user's active language:
 
 ```html
 <!DOCTYPE html>

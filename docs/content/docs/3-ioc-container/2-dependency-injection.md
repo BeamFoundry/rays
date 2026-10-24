@@ -169,7 +169,8 @@ func (m *MetricsService) Report() {
 
 ## Multi-Binding (Slices & Maps)
 
-Advanced architectural patterns (like the Strategy Pattern) rely on injecting *multiple* implementations of an interface or struct. Rays natively supports multi-binding into slices and maps for both interface types and struct pointers.
+Advanced architectural patterns (like the Strategy Pattern) rely on injecting *multiple* implementations of an interface
+or struct. Rays natively supports multi-binding into slices and maps for both interface types and struct pointers.
 
 ### Slice Injection (`[]T`)
 
@@ -177,7 +178,8 @@ Injecting into a slice will populate it with all registered Beams that match the
 
 ### Map Injection (`map[string]T`)
 
-Injecting into a map requires the key to be of type `string`. Rays will map the injected Beams by their Qualifier name. The key will be the injected Beam's `Qualifier` value.
+Injecting into a map requires the key to be of type `string`. Rays will map the injected Beams by their Qualifier name.
+The key will be the injected Beam's `Qualifier` value.
 
 ```go
 import . "github.com/BeamFoundry/rays/pkg/core"

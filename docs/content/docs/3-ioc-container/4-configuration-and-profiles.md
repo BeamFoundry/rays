@@ -7,40 +7,41 @@ weight: 4
 
 In enterprise applications, configuration and environment management go hand-in-hand.
 
-Rays provides a unified system to bind YAML configurations directly to your structs,
-override them based on active profiles (e.g., `dev`, `prod`), and conditionally load
-specific components depending on the environment.
+Rays provides a unified system to bind YAML configurations directly to your structs, override them based on active
+profiles (e.g., `dev`, `prod`), and conditionally load specific components depending on the environment.
 
 ## 1. Binding Data
 
 Embed `ConfigurationProperties` and define the YAML path via the `Name` tag.
 
-**NOTE:** *Rays strictly enforces a 1-to-1 parity between your
-YAML files and your Go code. The `yaml` tag is **not honored**. Only properties with
-the exact same case name as the Go struct field will be injected.*
+**NOTE:** *Rays strictly enforces a 1-to-1 parity between your YAML files and your Go code. The `yaml` tag is **not
+honored**. Only properties with the exact same case name as the Go struct field will be injected.*
 
 ### Valid types
 
 All numeric types, `bool` and `string` are honored.
 
-Rays includes native support for `time.Duration`.
-Text values like `"5000ms"` in the YAML file are automatically parsed using Go's standard `time.ParseDuration` function.
+Rays includes native support for `time.Duration`. Text values like `"5000ms"` in the YAML file are automatically parsed
+using Go's standard `time.ParseDuration` function.
 
 Struct and struct pointers (sub-object mapping) are supported.
 
-Struct implementing the `encoding.TextUnmarshaler` interface can also be used (string to struct mapping).
-The struct type (not a pointer to that) can be used directly.
+Struct implementing the `encoding.TextUnmarshaler` interface can also be used (string to struct mapping). The struct
+type (not a pointer to that) can be used directly.
 
 Slices of all the above types are supported.
 
-Finally map of `string` and of `encoding.TextUnmarshaler` to all the above types and to other map of those two types are supported.
+Finally map of `string` and of `encoding.TextUnmarshaler` to all the above types and to other map of those two types are
+supported.
 
 ### Validation
 
-Validation is done using the [Validation](github.com/go-playground/validator) project, given you provides the corresponding tags.
+Validation is done using the [Validation](github.com/go-playground/validator) project, given you provides the
+corresponding tags.
 
-NOTE: To validate private fields on a struct, reflection structs will be constructed internally with public fields instead.
-If using Cross-Field validation, fields should be indicated in their public form. Errors will be formatted using the original private field instead.
+NOTE: To validate private fields on a struct, reflection structs will be constructed internally with public fields
+instead. If using Cross-Field validation, fields should be indicated in their public form. Errors will be formatted
+using the original private field instead.
 
 ### Example
 

@@ -5,7 +5,9 @@ weight: 1
 
 # Error Handling
 
-If a container fails to boot, you need to know exactly *where* the wiring failed. Rays replaces standard Go `error` handling during the lifecycle with a richer `Error` interface that captures stack traces and key-value attributes automatically.
+If a container fails to boot, you need to know exactly *where* the wiring failed. Rays replaces standard Go `error`
+handling during the lifecycle with a richer `Error` interface that captures stack traces and key-value attributes
+automatically.
 
 ```go
 import . "github.com/BeamFoundry/rays/pkg/lang"
@@ -26,9 +28,11 @@ func (s *UserService) PostConstruct() Error {
 
 ## Integration with Logging
 
-Because Rays integrates its `lang` package directly with the `logging` framework (covered in Chapter 4), an `Error` can report itself seamlessly.
+Because Rays integrates its `lang` package directly with the `logging` framework (covered in Chapter 4), an `Error` can
+report itself seamlessly.
 
-Instead of manually unpacking the error to log it, simply call `err.LogError()`. This function automatically extracts the error message, the stack trace, and all attached attributes, serializing them into your configured logging backend.
+Instead of manually unpacking the error to log it, simply call `err.LogError()`. This function automatically extracts
+the error message, the stack trace, and all attached attributes, serializing them into your configured logging backend.
 
 ```go
 import . "github.com/BeamFoundry/rays/pkg/lang"
@@ -50,18 +54,27 @@ func (s *PaymentService) Process(amount float64) Error {
 
 ## The Try/Catch Pattern
 
-While standard Go relies heavily on `if err != nil` checks, complex procedural logic can sometimes benefit from a more traditional exception-handling flow. The `lang` package provides a robust `Try/Catch` mechanism designed specifically around the framework's `Error` interface.
+While standard Go relies heavily on `if err != nil` checks, complex procedural logic can sometimes benefit from a more
+traditional exception-handling flow. The `lang` package provides a robust `Try/Catch` mechanism designed specifically
+around the framework's `Error` interface.
 
 ### Core Functions
-* **`Try(try func(), catches ...ErrorHandler) Error`**: Executes the `try` function. If a panic occurs involving an `Error`, it evaluates the provided catches and returns the resulting `Error`. If no catch matches, the original error is returned automatically. Additionally, if standard Go code or a sub-function triggers a regular `panic()`, the `Try` block will safely catch it and wrap it into a new framework `Error` with the name "\"PanicError\"", ensuring your application does not crash unexpectedly.
+* **`Try(try func(), catches ...ErrorHandler) Error`**: Executes the `try` function. If a panic occurs involving an
+  `Error`, it evaluates the provided catches and returns the resulting `Error`. If no catch matches, the original error is
+  returned automatically. Additionally, if standard Go code or a sub-function triggers a regular `panic()`, the `Try`
+  block will safely catch it and wrap it into a new framework `Error` with the name "\"PanicError\"", ensuring your
+  application does not crash unexpectedly.
 * **`Catch[E Error](action func(E) Error) ErrorHandler`**: Catches an error based on its specific Go type.
-* **`CatchName(name string, action func(Error) Error) ErrorHandler`**: Catches an error based on its internal string name.
-* **`Finally(action func()) ErrorHandler`**: Executes an action after the `try` block finishes, regardless of success or failure.
+* **`CatchName(name string, action func(Error) Error) ErrorHandler`**: Catches an error based on its internal string
+name.
+* **`Finally(action func()) ErrorHandler`**: Executes an action after the `try` block finishes, regardless of success or
+failure.
 
-### Raise Helpers
-To easily trigger panics within a `Try` block when dealing with standard Go returns, use the `Raise` helpers:
+### Raise Helpers To easily trigger panics within a `Try` block when dealing with standard Go returns, use the `Raise`
+helpers:
 * **`RaiseErr(err error) bool`**: Panics if `err` is not nil.
-* **`RaiseVal[T any](t T, err error) T`**: Panics if `err` is not nil; otherwise, returns the object `T`. This is perfect for wrapping standard library calls like `RaiseVal(os.ReadFile("config.yaml"))`.
+* **`RaiseVal[T any](t T, err error) T`**: Panics if `err` is not nil; otherwise, returns the object `T`. This is
+perfect for wrapping standard library calls like `RaiseVal(os.ReadFile("config.yaml"))`.
 
 ### Example Usage
 
