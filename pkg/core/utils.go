@@ -156,3 +156,11 @@ func GetFieldFirstTag(field *reflect.StructField, tags []string) string {
 func UnprotectValue(value reflect.Value) reflect.Value {
 	return reflect.NewAt(value.Type(), unsafe.Pointer(value.UnsafeAddr())).Elem()
 }
+
+func uncapitalize(s string) string {
+	r, size := utf8.DecodeRuneInString(s)
+	if size == 0 || r == utf8.RuneError {
+		return s
+	}
+	return string(unicode.ToLower(r)) + s[size:]
+}
