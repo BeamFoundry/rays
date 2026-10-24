@@ -14,6 +14,7 @@ import (
 	"github.com/BeamFoundry/rays/internal/boot/config"
 	"github.com/BeamFoundry/rays/internal/boot/logger"
 	_ "github.com/BeamFoundry/rays/pkg/testing"
+	. "github.com/BeamFoundry/rays/pkg/util"
 )
 
 type failingFS struct{}
@@ -91,6 +92,10 @@ type BookElemsMapStringPointer struct {
 
 type BookElemsMap struct {
 	books []map[string]string
+}
+
+type BookElemsMapEntry struct {
+	books []MapEntry[string, string]
 }
 
 type TranslationMap struct {
@@ -334,6 +339,19 @@ var _ = Describe("config", func() {
 		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
 		Expect(elems.books[0]["Les Miserables"]).To(Equal("Victor Hugo"))
 		Expect(elems.books[1]["Germinal"]).To(Equal("emile zola"))
+	})
+	It("can load an object using slice of MapEntry", func() {
+		elems := &BookElemsMapEntry{}
+		c := config.NewConfigFor(favoritesListElems)
+		Expect(c.AddOverride("favorites.books.[1].value", "emile zola")).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+		Expect(elems.books[0].Key()).To(Equal("Les Miserables"))
+		Expect(elems.books[0].Value()).To(Equal("Victor Hugo"))
+		Expect(elems.books[1].Value()).To(Equal("emile zola"))
 	})
 	It("can duplicate default config", func() {
 		elems := &BookElemsMapObject{}
