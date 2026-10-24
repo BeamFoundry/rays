@@ -27,8 +27,8 @@ var _ = Describe("Optional", func() {
 		opt := OptionalEmpty[string]()
 		Expect(opt.IsPresent()).To(BeFalse())
 		Expect(opt.IsEmpty()).To(BeTrue())
-		Expect(opt.Type()).To(Equal(reflect.TypeFor[string]()))
-		Expect(opt.SetValue(0)).To(HaveOccurred())
+		Expect(opt.ValueType()).To(Equal(reflect.TypeFor[string]()))
+		Expect(opt.SetAnyValue(0)).To(HaveOccurred())
 	})
 
 	It("can be created from a value with OptionalOfNullable, even empty (but not nil)", func() {
