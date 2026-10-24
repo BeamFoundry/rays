@@ -3,7 +3,9 @@ package lang_test
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -74,13 +76,16 @@ var _ = Describe("NilError", func() {
 		err.Name()
 		err.Message()
 		_ = err.Error()
-		err.GomegaString()
 		err.AddAttribute("foo", "bar")
+		err.AddAttributes("foo", "bar")
+		err.GomegaString()
+		err.Log(logger.LevelInfo, "foo", "bar")
 		err.LogError()
+		err.LogErrorWithStackTrace()
+		err.LogWithStackTrace(logger.LevelDebug, "foo", "bar")
+		err.PrintStacktrace(os.Stdout)
+		fmt.Fprintf(io.Discard, "err: %+v", err)
 		//nolint:errcheck // Not testing it
 		_, _ = err.MarshalJSON()
-		err.LogErrorWithStackTrace()
-		err.Log(logger.LevelInfo, "foo", "bar")
-		err.LogWithStackTrace(logger.LevelDebug, "foo", "bar")
 	})
 })

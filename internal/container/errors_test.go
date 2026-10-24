@@ -349,4 +349,8 @@ var _ = Describe("Errors", func() {
 		err := GetContainer().Initialize()
 		Expect(err).To(HaveOccurred())
 	})
+	It("will error on injecting string", func() {
+		_, err := GetContainer().AddBeamFor(&BeamWithStringInject{})
+		Expect(err).To(HaveOccurred())
+	})
 })

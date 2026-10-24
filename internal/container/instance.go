@@ -99,7 +99,10 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 	if err != nil && err.Name() == "InvalidParameter" {
 		return nil
 	}
+
 	this.logger.Trace("Evaluating field", "field.Name", field.Name, "qualifier", this.beam.Attributes()[QualifierAttribute])
+
+	//nolint:exhaustive // all valid cases whould be tested in FindBeamsForStructField
 	switch field.Type.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		// TODO: Verify this is still needed
@@ -191,7 +194,6 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 			}
 			furnace.Set(reflect.ValueOf(factory))
 		}
-	default:
 	}
 	return nil
 }
