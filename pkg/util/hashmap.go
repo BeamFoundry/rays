@@ -6,6 +6,7 @@ import (
 	"maps"
 	"reflect"
 
+	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 

@@ -92,11 +92,9 @@ func (e *EmailWorker) PostConstruct() Error {
 ```
 
 ## Phase 3: Runtime (`BeamRunner`)
-Beams that implement the `rays.BeamRunner` interface will have their `Run(wg *sync.WaitGroup)` method executed when
-`ctx.Run()` is called in `main.go`.
+Beams that implement the `rays.BeamRunner` interface will have their `Run(wg *sync.WaitGroup)` method executed when `ctx.Run()` is called in `main.go`.
 
-This hook is specifically designed for long-running processes (like HTTP servers, Kafka consumers, or periodic cron
-jobs). The WaitGroup keeps the main application thread alive while your background workers execute.
+This hook is specifically designed for long-running processes (like HTTP servers, Kafka consumers, or periodic cron jobs). The WaitGroup keeps the main application thread alive while your background workers execute.
 
 ```go
 import (

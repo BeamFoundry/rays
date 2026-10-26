@@ -5,8 +5,7 @@ weight: 5
 
 # Prototypes & Foundries
 
-If you need a new instance of an object every time it is requested (e.g., per HTTP request, per GRPC stream), you cannot
-use a Singleton. You need a **Prototype**.
+If you need a new instance of an object every time it is requested (e.g., per HTTP request, per GRPC stream), you cannot use a Singleton. You need a **Prototype**.
 
 ## `Foundry[T]`
 

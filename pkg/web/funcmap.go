@@ -4,6 +4,7 @@ import (
 	"html/template"
 	"reflect"
 
+	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/i18n"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 	. "github.com/BeamFoundry/rays/pkg/util"

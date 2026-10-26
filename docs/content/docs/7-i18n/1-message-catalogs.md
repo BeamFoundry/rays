@@ -5,16 +5,13 @@ weight: 1
 
 # Message Catalogs & Pluralization
 
-Rays simplifies message localization by letting you define translation catalogs directly in your YAML configuration
-files. Messages are automatically loaded into `LocaleMessageBundle` instances, with full support for positional
-parameters, Unicode CLDR pluralization rules, and numeric ranges.
+Rays simplifies message localization by letting you define translation catalogs directly in your YAML configuration files. Messages are automatically loaded into `LocaleMessageBundle` instances, with full support for positional parameters, Unicode CLDR pluralization rules, and numeric ranges.
 
 ---
 
 ## Defining Messages in YAML
 
-Message catalogs are organized by locale under the `localization.messages` property in your `application.yaml` file.
-Rays recognizes four distinct categories of localized messages:
+Message catalogs are organized by locale under the `localization.messages` property in your `application.yaml` file. Rays recognizes four distinct categories of localized messages:
 
 | Category | Description | Placeholders |
 | :--- | :--- | :--- |
@@ -74,9 +71,7 @@ localization:
 
 ## CLDR Plural Rules
 
-Different languages follow different rules for pluralization. In English, cardinal numbers only distinguish between
-`ONE` (1) and `OTHER` (0, 2, 3, ...). Other languages like Polish, Russian, or Arabic use additional categories such as
-`FEW` or `MANY`.
+Different languages follow different rules for pluralization. In English, cardinal numbers only distinguish between `ONE` (1) and `OTHER` (0, 2, 3, ...). Other languages like Polish, Russian, or Arabic use additional categories such as `FEW` or `MANY`.
 
 Rays provides a type-safe `PluralRule` enum corresponding to standard Unicode CLDR plural categories:
 
@@ -97,15 +92,13 @@ type PluralRule = Enum[PluralRuleEnum]
 var PluralRules = PluralRule{}.New()
 ```
 
-When defining cardinal, ordinal, or range entries in YAML, specify rule names matching these enum values (e.g., `ONE`,
-`FEW`, `OTHER`).
+When defining cardinal, ordinal, or range entries in YAML, specify rule names matching these enum values (e.g., `ONE`, `FEW`, `OTHER`).
 
 ---
 
 ## Programmatic Translation API
 
-You can look up any `LocaleMessageBundle` from a `MessageSource` to format and translate messages in your business
-logic.
+You can look up any `LocaleMessageBundle` from a `MessageSource` to format and translate messages in your business logic.
 
 ### 1. Simple Translations
 
@@ -125,8 +118,7 @@ msg, err = bundle.Translate("welcome_user", "John", "Doe")
 
 ### 2. Cardinal Pluralization
 
-Use `Cardinal()` to format quantities according to the language's plural rules. Rays automatically formats the number
-according to the locale's number convention:
+Use `Cardinal()` to format quantities according to the language's plural rules. Rays automatically formats the number according to the locale's number convention:
 
 ```go
 // English: 1 -> ONE, 5 -> OTHER
