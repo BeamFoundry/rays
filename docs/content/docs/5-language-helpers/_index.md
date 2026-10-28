@@ -11,3 +11,4 @@ Rays provides a suite of tools in the `lang` package to defend your business log
 Explore the framework helpers below:
 * [Error Handling](1-error-handling/)
 * [Enum Types](2-enum-types/)
+* [Streams](3-streams/)

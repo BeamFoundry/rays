@@ -4,6 +4,7 @@ import (
 	"iter"
 	"sync"
 
+	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 

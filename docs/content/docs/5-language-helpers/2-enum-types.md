@@ -5,11 +5,9 @@ weight: 2
 
 # Type-Safe Enums
 
-Go does not have native, strict enums. This often leads to configuration bugs where an invalid string from a YAML file
-is happily parsed into a `string` field, only to fail deep within the application logic.
+Go does not have native, strict enums. This often leads to configuration bugs where an invalid string from a YAML file is happily parsed into a `string` field, only to fail deep within the application logic.
 
-Rays solves this with `Enum[T]`. It strictly binds string values from YAML into custom Go types and validates them
-during the framework's Instantiation phase.
+Rays solves this with `Enum[T]`. It strictly binds string values from YAML into custom Go types and validates them during the framework's Instantiation phase.
 
 ### 1. Define the Enum Type
 You can define your enums using a struct to hold the variants as fields.
@@ -48,8 +46,7 @@ type AppConfig struct {
 ```
 
 ### 3. Safe Access in Business Logic
-Because of the generic structuring, you must initialize the enum type by calling `.New()` to ensure its internal state
-is properly configured before accessing its variants.
+Because of the generic structuring, you must initialize the enum type by calling `.New()` to ensure its internal state is properly configured before accessing its variants.
 
 You can then compare it directly to your configuration fields without needing a getter function.
 

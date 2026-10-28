@@ -509,17 +509,7 @@ func (this *Config) unmarshal(obj any) Error {
 						continue
 					}
 					s := NewConfig()
-					_, hasKey := field.Type.Elem().FieldByName("key")
-					_, hasValue := field.Type.Elem().FieldByName("value")
-					mapEntry := Strings(field.Type.Elem().String()).HasPrefix("util.MapEntry[")
-					if len(c) == 1 && hasKey && hasValue && mapEntry {
-						for entryKey, entryValue := range c {
-							s.config.Put("key", entryKey)
-							s.config.Put("value", entryValue)
-						}
-					} else {
-						s.config.PutAll(NewHashMapFor(c))
-					}
+					s.config.PutAll(NewHashMapFor(c))
 					prefix := String(key).ToLowerCase().String() + ".[" + strconv.Itoa(i) + "]."
 					for k, v := range this.overrides.Iterator() {
 						if p := String(k); p.StartsWith(prefix) {
