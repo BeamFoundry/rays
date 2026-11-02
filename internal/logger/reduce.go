@@ -30,11 +30,12 @@ func reducePkgElements(elems []string) string {
 
 // Function used to reduce a Function name (from logging)
 func ReduceFunctionName(function string) string {
+	functionLock.Lock()
+	defer functionLock.Unlock()
+
 	if ret, ok := functionCache[function]; ok {
 		return ret
 	}
-	functionLock.Lock()
-	defer functionLock.Unlock()
 
 	dir := filepath.Dir(function)
 	base := filepath.Base(function)
