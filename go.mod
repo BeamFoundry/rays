@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/go-playground/locales v0.14.2
 	github.com/go-playground/universal-translator v0.18.2
-	github.com/go-playground/validator/v10 v10.30.5
+	github.com/go-playground/validator/v10 v10.30.6
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/timandy/routine v1.1.6
@@ -15,7 +15,7 @@ require (
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
