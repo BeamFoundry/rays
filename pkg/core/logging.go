@@ -11,9 +11,10 @@ const (
 	LevelInfo  = slog.LevelInfo
 	LevelWarn  = slog.LevelWarn
 	LevelError = slog.LevelError
+	LevelFatal = slog.Level(12)
 )
 
-// Logging is an interface detailing the majority of function provided by [slog.Logging], adding [LevelTrace] support.
+// Logging is an interface detailing the majority of function provided by [slog.Logging], adding [LevelTrace] and [LevelFatal] support.
 //
 // The default implementation is hidden inside the container internal package, as it is initialized directly by the container early on.
 //
@@ -46,7 +47,7 @@ const (
 //	  logging:
 //	    # The default minimum log level
 //	    #
-//	    # Valid values are "TRACE", "DEBUG", "INFO", "WARN", "ERROR" in that order.
+//	    # Valid values are "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL" in that order.
 //	    # A value of "INFO" for example will hide all logging from "TRACE" and "DEBUG"
 //	    #
 //	    # Type: text
@@ -55,7 +56,7 @@ const (
 //
 //	    # The slog handler to use.
 //	    #
-//	    # Valid values are "DEFAULT", "TEXT", or "JSON".
+//	    # Valid values are "DEFAULT", "TEXT", "JSON", "CUSTOM", "ECS", "GELF", or "LOGSTASH".
 //	    #
 //	    # Type: text
 //	    # Default: DEFAULT
@@ -66,6 +67,19 @@ const (
 //	    # Type: boolean
 //	    # Default: true
 //	    source: true
+//
+//	    # Configure color coding in log entries.
+//	    #
+//	    # Valid values are "AUTO", "ON", or "OFF".
+//	    #
+//	    # Type: text
+//	    # Default: AUTO
+//	    color: AUTO
+//
+//	    # The log format pattern for CUSTOM handler (defaults to DefaultFormat).
+//	    #
+//	    # Type: text
+//	    # format: "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
 //
 //	    # Override the log level for specific packages.
 //	    #
@@ -93,6 +107,10 @@ type Logging interface {
 	Error(msg string, args ...any)
 	// ErrorContext() logs at [LevelError] with the given context.
 	ErrorContext(ctx context.Context, msg string, args ...any)
+	// Fatal() logs at [LevelFatal].
+	Fatal(msg string, args ...any)
+	// FatalContext() logs at [LevelFatal] with the given context.
+	FatalContext(ctx context.Context, msg string, args ...any)
 	// Handler() returns the slog.Handler.
 	Handler() slog.Handler
 	// Info() logs at [LevelInfo].

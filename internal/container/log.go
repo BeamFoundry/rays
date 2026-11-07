@@ -19,7 +19,8 @@ type LogLevel struct {
 	TRACE,
 	DEBUG,
 	WARN,
-	ERROR Enum[LogLevel]
+	ERROR,
+	FATAL Enum[LogLevel]
 }
 
 func (this *LogLevel) Level() slog.Level {
@@ -32,6 +33,8 @@ func (this *LogLevel) Level() slog.Level {
 		return LevelWarn
 	case LogLevel{}.New().ERROR:
 		return LevelError
+	case LogLevel{}.New().FATAL:
+		return LevelFatal
 	default:
 		return LevelInfo
 	}
@@ -41,33 +44,85 @@ type LogHandler struct {
 	Enum[LogHandler]
 	DEFAULT,
 	JSON,
-	TEXT Enum[LogHandler]
+	TEXT,
+	CUSTOM,
+	ECS,
+	GELF,
+	LOGSTASH Enum[LogHandler]
 }
 
-func (this *LogHandler) Handler() func(io.Writer, *slog.HandlerOptions) slog.Handler {
+func (this *LogHandler) Handler(format ...string) func(io.Writer, *slog.HandlerOptions) slog.Handler {
+	customFormat := logger.DefaultFormat
+	if len(format) > 0 && format[0] != "" {
+		customFormat = format[0]
+	}
 	switch this.Enum {
+	case LogHandler{}.New().DEFAULT:
+		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
+			return logger.NewHandlerWithFormat(writer, options, logger.DefaultFormat)
+		}
 	case LogHandler{}.New().JSON:
 		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
-			return slog.NewJSONHandler(writer, options)
+			return logger.NewHandlerWithFormat(writer, options, logger.JSONFormat)
 		}
 	case LogHandler{}.New().TEXT:
 		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
-			return slog.NewTextHandler(writer, options)
+			return logger.NewHandlerWithFormat(writer, options, logger.TextFormat)
 		}
+	case LogHandler{}.New().CUSTOM:
+		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
+			return logger.NewHandlerWithFormat(writer, options, customFormat)
+		}
+	case LogHandler{}.New().ECS:
+		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
+			return logger.NewHandlerWithFormat(writer, options, logger.ECSFormat)
+		}
+	case LogHandler{}.New().GELF:
+		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
+			return logger.NewHandlerWithFormat(writer, options, logger.GELFFormat)
+		}
+	case LogHandler{}.New().LOGSTASH:
+		return func(writer io.Writer, options *slog.HandlerOptions) slog.Handler {
+			return logger.NewHandlerWithFormat(writer, options, logger.LogstashFormat)
+		}
+	default:
+		return nil
 	}
-	return nil
+}
+
+type LogColor struct {
+	Enum[LogColor]
+	AUTO,
+	ON,
+	OFF Enum[LogColor]
+}
+
+func (this LogColor) Apply(lg *logger.Logger) {
+	switch this.Enum {
+	case LogColor{}.New().ON:
+		lg.SetColor(true)
+	case LogColor{}.New().OFF:
+		lg.SetColor(false)
+	default:
+		lg.EnableColor()
+	}
 }
 
 type LoggingProperties struct {
 	ConfigurationProperties `Name:"rays.logging"`
 	// Loggers
 	loggers map[string]LogLevel
+	// Log format for CUSTOM handler
+	format string
 	/* configuration keys */
-	// Set rays.logging.handler to "DEFAULT", "TEXT" or "JSON"
+	// Set rays.logging.handler to "DEFAULT", "TEXT", "JSON" or "CUSTOM"
 	handler LogHandler
-	// Set rays.logging.level to "TRACE", "DEBUG", "INFO", "WARN" or "ERROR".
+	// Set rays.logging.level to "TRACE", "DEBUG", "INFO", "WARN", "ERROR" or "FATAL".
 	// Defaults to "INFO"
 	level LogLevel
+	// Set rays.logging.color to "AUTO", "ON", or "OFF".
+	// Defaults to "AUTO"
+	color LogColor
 	// Add Logging source
 	source bool
 }
@@ -80,8 +135,20 @@ func (this *LoggingProperties) LogHandler() LogHandler {
 	return this.handler
 }
 
+func (this *LoggingProperties) LogColor() LogColor {
+	return this.color
+}
+
+func (this *LoggingProperties) Color() LogColor {
+	return this.color
+}
+
 func (this *LoggingProperties) AddSource() bool {
 	return this.source
+}
+
+func (this *LoggingProperties) Format() string {
+	return this.format
 }
 
 func (this *LoggingProperties) MapLevels() map[string]LogLevel {
@@ -113,6 +180,10 @@ var _, _ = any(&LoggingConfiguration{}).(Stereotype)
 func (this *LoggingConfiguration) PostConstruct() Error {
 	this.loggers = slices.Sorted(maps.Keys(this.properties.MapLevels()))
 	slices.Reverse(this.loggers)
+	if this.properties.handler.Enum == (LogHandler{}.New().CUSTOM) && this.properties.format != "" {
+		logger.GetLogger().SetFormat(this.properties.format)
+	}
+	this.properties.color.Apply(logger.GetLogger())
 	logger.GetLogger().Debug("LoggingConfiguration::PostConstruct()", "loggers", this.loggers)
 	return nil
 }
@@ -148,6 +219,8 @@ func init() {
 		"handler": LogHandler{}.New().DEFAULT.String(),
 		"level":   LogLevel{}.New().INFO.String(),
 		"source":  true,
+		"format":  logger.DefaultFormat,
+		"color":   LogColor{}.New().AUTO.String(),
 	}
 
 	//nolint:errcheck // it can not fail

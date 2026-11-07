@@ -49,10 +49,12 @@ var bufPool = sync.Pool{
 	},
 }
 
+// NewBuffer retrieves a Buffer from the pool. Callers should call Free when finished.
 func NewBuffer() *Buffer {
 	return bufPool.Get().(*Buffer)
 }
 
+// Free returns the Buffer to the pool if its capacity does not exceed the maximum buffer size.
 func (b *Buffer) Free() {
 	// To reduce peak allocation, return only smaller buffers to the pool.
 	const maxBufferSize = 16 << 10
@@ -62,33 +64,40 @@ func (b *Buffer) Free() {
 	}
 }
 
+// Reset resets the buffer length to zero.
 func (b *Buffer) Reset() {
 	b.SetLen(0)
 }
 
+// Write appends the byte slice p to the buffer.
 func (b *Buffer) Write(p []byte) (int, error) {
 	*b = append(*b, p...)
 	return len(p), nil
 }
 
+// WriteString appends the string s to the buffer.
 func (b *Buffer) WriteString(s string) (int, error) {
 	*b = append(*b, s...)
 	return len(s), nil
 }
 
+// WriteByte appends a single byte c to the buffer.
 func (b *Buffer) WriteByte(c byte) error {
 	*b = append(*b, c)
 	return nil
 }
 
+// String returns the contents of the unread portion of the buffer as a string.
 func (b *Buffer) String() string {
 	return string(*b)
 }
 
+// Len returns the number of bytes in the buffer.
 func (b *Buffer) Len() int {
 	return len(*b)
 }
 
+// SetLen truncates the buffer length to n bytes.
 func (b *Buffer) SetLen(n int) {
 	*b = (*b)[:n]
 }

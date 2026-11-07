@@ -28,7 +28,7 @@ func reducePkgElements(elems []string) string {
 	return s + elems[len(elems)-1]
 }
 
-// Function used to reduce a Function name (from logging)
+// ReduceFunctionName reduces a fully qualified function name for concise log source reporting.
 func ReduceFunctionName(function string) string {
 	functionLock.Lock()
 	defer functionLock.Unlock()
@@ -57,7 +57,7 @@ func ReduceFunctionName(function string) string {
 	}
 	obj = strings.Replace(obj, "[...]", "", 1)
 
-	ret := pkg + " " + obj //+ "(" + fn + ")"
+	ret := pkg + "." + obj
 	functionCache[function] = ret
 	return ret
 }

@@ -191,9 +191,10 @@ func (this *Container) Initialize() Error {
 		}
 		if this.handler != nil {
 			logger.GetLogger().SetHandler(this.handler)
-		} else if handler := this.loggingProperties.LogHandler(); handler.Handler() != nil {
-			logger.GetLogger().SetHandler(handler.Handler())
+		} else if handler := this.loggingProperties.LogHandler(); handler.Handler(this.loggingProperties.Format()) != nil {
+			logger.GetLogger().SetHandler(handler.Handler(this.loggingProperties.Format()))
 		}
+		this.loggingProperties.LogColor().Apply(logger.GetLogger())
 		this.loggers = slices.Sorted(maps.Keys(this.loggingProperties.MapLevels()))
 		slices.Reverse(this.loggers)
 	}

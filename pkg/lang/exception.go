@@ -131,7 +131,7 @@ func RaiseErr(err error) bool {
 // If the error is not nil it will use it to panic() otherwise it will panic() with an NilError.
 //
 // It only usage is on untestable situation where an error may occur. It will be returned as an Error,
-// in any cases, letting you can [Error.LogError] on it and not doing anything if it's a [NilError].
+// in any cases, letting you use [Error.LogError] on it, having no impact if it's a [NilError].
 func RaiseNilErr(err error) bool {
 	if err != nil {
 		panic(err)

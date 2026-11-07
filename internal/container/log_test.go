@@ -1,10 +1,11 @@
 package container_test
 
 import (
+	"bytes"
 	"context"
-	"reflect"
 	_ "unsafe"
 
+	"github.com/BeamFoundry/rays/internal/logger"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,6 +27,8 @@ var _ = Describe("Logging", func() {
 		instance := GetBeamDefaultInstance[Logging]()
 		instance.Trace("logging")
 		instance.TraceContext(context.Background(), "logging")
+		instance.Fatal("logging")
+		instance.FatalContext(context.Background(), "logging")
 	})
 	It("can inject itself", func() {
 		err := GetContainer().LoadConfigAt(map[string]any{
@@ -56,17 +59,18 @@ var _ = Describe("LoggingProperties", func() {
 		err := GetContainer().Initialize()
 		Expect(err).NotTo(HaveOccurred())
 
-		name := reflect.TypeOf(GetLogger().Handler()).String()
-
-		Expect(name).To(Equal("*slog.JSONHandler"))
+		h, ok := GetLogger().Handler().(*logger.Handler)
+		Expect(ok).To(BeTrue())
+		Expect(h.GetFormat()).To(Equal(logger.JSONFormat))
 	})
 	It("can set a slog/TextHandler", func() {
 		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "TEXT", "level": "DEBUG"}, "rays.logging")).NotTo(HaveOccurred())
 		err := GetContainer().Initialize()
 		Expect(err).NotTo(HaveOccurred())
 
-		name := reflect.TypeOf(GetLogger().Handler()).String()
-		Expect(name).To(Equal("*slog.TextHandler"))
+		h, ok := GetLogger().Handler().(*logger.Handler)
+		Expect(ok).To(BeTrue())
+		Expect(h.GetFormat()).To(Equal(logger.TextFormat))
 	})
 
 	It("can set a custom Handler", func() {
@@ -74,8 +78,9 @@ var _ = Describe("LoggingProperties", func() {
 		err := GetContainer().Initialize()
 		Expect(err).NotTo(HaveOccurred())
 
-		name := reflect.TypeOf(GetLogger().Handler()).String()
-		Expect(name).NotTo(Equal("*slog.TextHandler"))
+		h, ok := GetLogger().Handler().(*logger.Handler)
+		Expect(ok).To(BeTrue())
+		Expect(h.GetFormat()).To(Equal(logger.DefaultFormat))
 	})
 
 	It("can use With", func() {
@@ -120,5 +125,79 @@ var _ = Describe("LoggingProperties", func() {
 		Expect(GetContainer().LoadConfigAt(map[string]any{"level": "ERROR"}, "rays.logging")).NotTo(HaveOccurred())
 		err := GetContainer().Initialize()
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("can set level to FATAL", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"level": "FATAL"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("can set custom format", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "CUSTOM", "format": "%level(%-5v) %msg(%v)"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().GetFormat()).To(Equal("%level(%-5v) %msg(%v)"))
+	})
+
+	It("defaults custom format to DefaultFormat", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "CUSTOM", "format": ""}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().GetFormat()).To(Equal(logger.DefaultFormat))
+	})
+
+	It("can set handler to ECS", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "ECS"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().GetFormat()).To(Equal(logger.ECSFormat))
+	})
+
+	It("can set handler to GELF", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "GELF"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().GetFormat()).To(Equal(logger.GELFFormat))
+	})
+
+	It("can set handler to LOGSTASH", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"handler": "LOGSTASH"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().GetFormat()).To(Equal(logger.LogstashFormat))
+	})
+
+	It("can set color to ON", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"color": "ON"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().IsColor()).To(BeTrue())
+	})
+
+	It("can set color to OFF", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"color": "OFF"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetLogger().IsColor()).To(BeFalse())
+	})
+
+	It("can set color to AUTO", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{"color": "AUTO"}, "rays.logging")).NotTo(HaveOccurred())
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+		// In tests under Ginkgo, output is GinkgoWriter, which supports colors in terminal
+		Expect(GetLogger().IsColor()).To(BeTrue())
+
+		// On non-terminal writer (like bytes.Buffer), AUTO detects false
+		buf := &bytes.Buffer{}
+		GetLogger().SetOutput(buf)
+		GetLogger().EnableColor()
+		Expect(GetLogger().IsColor()).To(BeFalse())
+
+		// Forcing SetColor(true) forces color even on non-terminal
+		GetLogger().SetColor(true)
+		Expect(GetLogger().IsColor()).To(BeTrue())
+		GetLogger().SetOutput(GinkgoWriter)
 	})
 })
