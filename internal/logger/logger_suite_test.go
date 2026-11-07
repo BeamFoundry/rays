@@ -1235,6 +1235,28 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	})
 
 	It("covers isTerminal environment variables (NO_COLOR, TERM=dumb)", func() {
+		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
+		origTerm, hasTerm := os.LookupEnv("TERM")
+		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
+		//nolint:errcheck // restoring original environment in test cleanup
+		defer func() {
+			if hasNoColor {
+				os.Setenv("NO_COLOR", origNoColor)
+			} else {
+				os.Unsetenv("NO_COLOR")
+			}
+			if hasTerm {
+				os.Setenv("TERM", origTerm)
+			} else {
+				os.Unsetenv("TERM")
+			}
+			if hasColorTerm {
+				os.Setenv("COLORTERM", origColorTerm)
+			} else {
+				os.Unsetenv("COLORTERM")
+			}
+		}()
+
 		h := logger.NewHandlerWithFormat(buf, nil, "%clr(%level(%v)) %msg(%v)\n")
 
 		// NO_COLOR env var disables color
@@ -1329,10 +1351,12 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		for i := 0; i < 20; i++ {
 			wg.Add(2)
 			go func() {
+				defer GinkgoRecover()
 				defer wg.Done()
 				Expect(clone1.Handle(context.Background(), slog.Record{Message: "msg1"})).To(Succeed())
 			}()
 			go func() {
+				defer GinkgoRecover()
 				defer wg.Done()
 				Expect(clone2.Handle(context.Background(), slog.Record{Message: "msg2"})).To(Succeed())
 			}()
@@ -1355,6 +1379,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 				h.SetColor(true)
 			}()
 			go func() {
+				defer GinkgoRecover()
 				defer wg.Done()
 				Expect(h.Handle(context.Background(), slog.Record{Message: "concurrent"})).To(Succeed())
 			}()
@@ -1488,6 +1513,24 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		}
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(Equal("(2026-11-07 paren_msg\n"))
+
+		// Quoted format layout after width and precision modifiers
+		buf.Reset()
+		hMod := logger.NewHandlerWithFormat(buf, nil, `[%time(%-15.10"(2006-01-02"v)] %msg(%v)`)
+		Expect(hMod.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("[2026-11-07     ] paren_msg\n"))
+
+		// Apostrophe inside %msg(...) does not prevent locating the closing parenthesis
+		buf.Reset()
+		hApos := logger.NewHandlerWithFormat(buf, nil, "%msg(it's %v)")
+		Expect(hApos.Handle(context.Background(), slog.Record{Message: "alive"})).To(Succeed())
+		Expect(buf.String()).To(Equal("it's alive\n"))
+
+		// Literal double quotes inside %msg(...)
+		buf.Reset()
+		hQuote := logger.NewHandlerWithFormat(buf, nil, `%msg("quoted" %v)`)
+		Expect(hQuote.Handle(context.Background(), slog.Record{Message: "msg"})).To(Succeed())
+		Expect(buf.String()).To(Equal(`"quoted" msg` + "\n"))
 	})
 
 	It("formats negative fractional times correctly in unixmilli, unix_micro, and unixnano", func() {
