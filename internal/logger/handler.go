@@ -1,83 +1,103 @@
 package logger
 
-// https://github.com/lmittmann/tint/blob/main/handler.go
-/*
-BSD 3-Clause License
-
-Copyright (c) 2023 lmittmann
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
 import (
 	"context"
-	"encoding"
-	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
-	"reflect"
-	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
-	"time"
 )
 
 var defaultHandlerfunc = func(output io.Writer, options *slog.HandlerOptions) slog.Handler {
 	return NewHandler(output, options)
 }
 
+// Handler is an slog.Handler implementation that formats log records
+// using a compiled pattern-based layout engine with ANSI color and mode support.
 type Handler struct {
-	opts        slog.HandlerOptions
-	w           io.Writer
-	attrsPrefix string
-	groupPrefix string
-	groups      []string
-
-	mu sync.Mutex
+	opts    slog.HandlerOptions
+	w       io.Writer
+	pattern *compiledPattern
+	color   *bool
+	format  string
+	groups  []string
+	attrs   []collectedAttr
+	mu      sync.Mutex
 }
 
+// NewHandler creates a new Handler writing to w with DefaultFormat and the given options.
 func NewHandler(w io.Writer, opts *slog.HandlerOptions) *Handler {
-	h := &Handler{w: w}
+	return NewHandlerWithFormat(w, opts, DefaultFormat)
+}
+
+// NewHandlerWithFormat creates a new Handler writing to w using the specified pattern format.
+// If format is empty, DefaultFormat is used.
+func NewHandlerWithFormat(w io.Writer, opts *slog.HandlerOptions, format string) *Handler {
+	if format == "" {
+		format = DefaultFormat
+	}
+	h := &Handler{
+		w:      w,
+		format: format,
+	}
 	if opts != nil {
 		h.opts = *opts
 	}
+	h.pattern = compilePattern(h.format)
 	return h
+}
+
+// SetFormat updates the pattern format and recompiles the layout AST.
+// If format is empty, DefaultFormat is used.
+func (this *Handler) SetFormat(format string) {
+	if format == "" {
+		format = DefaultFormat
+	}
+	this.format = format
+	this.pattern = compilePattern(format)
+}
+
+// GetFormat returns the currently configured pattern format string.
+func (this *Handler) GetFormat() string {
+	return this.format
+}
+
+// SetColor explicitly enables or disables ANSI color output.
+func (this *Handler) SetColor(enabled bool) {
+	this.color = &enabled
+}
+
+// EnableColor automatically enables ANSI colors if the output writer is a terminal.
+func (this *Handler) EnableColor() {
+	this.SetColor(isTerminal(this.w))
+}
+
+// IsColor reports whether ANSI color output is currently enabled.
+// If not explicitly set via SetColor, it detects whether the output writer is a terminal.
+func (this *Handler) IsColor() bool {
+	if this.color != nil {
+		return *this.color
+	}
+	return isTerminal(this.w)
 }
 
 func (this *Handler) clone() *Handler {
 	return &Handler{
-		attrsPrefix: this.attrsPrefix,
-		groupPrefix: this.groupPrefix,
-		groups:      this.groups,
-		w:           this.w,
-		opts:        this.opts,
+		w:       this.w,
+		opts:    this.opts,
+		format:  this.format,
+		pattern: this.pattern,
+		color:   this.color,
+		attrs:   slices.Clone(this.attrs),
+		groups:  slices.Clone(this.groups),
 	}
 }
 
+// ReplaceAttr returns the attribute replacement function from HandlerOptions,
+// or a default pass-through function if none was provided.
 func (this *Handler) ReplaceAttr() func(groups []string, a slog.Attr) slog.Attr {
 	if this.opts.ReplaceAttr == nil {
 		return func(_ []string, a slog.Attr) slog.Attr { return a }
@@ -85,6 +105,7 @@ func (this *Handler) ReplaceAttr() func(groups []string, a slog.Attr) slog.Attr 
 	return this.opts.ReplaceAttr
 }
 
+// Enabled reports whether the handler emits log records at the specified level.
 func (this *Handler) Enabled(_ context.Context, level slog.Level) bool {
 	minLevel := slog.LevelInfo
 	if this.opts.Level != nil {
@@ -93,86 +114,61 @@ func (this *Handler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= minLevel
 }
 
+// Handle formats and writes the slog.Record to the destination writer according to the pattern AST.
+//
 //nolint:gocritic,errcheck // Have to respect interface, ignore write errors
 func (this *Handler) Handle(_ context.Context, r slog.Record) error {
-	// get a buffer from the sync pool
 	buf := NewBuffer()
 	defer buf.Free()
 
+	allAttrs := make([]collectedAttr, 0, len(this.attrs)+r.NumAttrs())
+	allAttrs = append(allAttrs, this.attrs...)
+
 	rep := this.ReplaceAttr()
-
-	// write time
-	if !r.Time.IsZero() {
-		val := r.Time.Round(0) // strip monotonic to match Attr behavior
-		if a := rep(nil /* groups */, slog.Time(slog.TimeKey, val)); a.Key != "" {
-			val := a.Value.Resolve()
-			if val.Kind() == slog.KindTime {
-				this.appendTime(buf, val.Time())
-			} else {
-				this.appendValue(buf, val, false)
-			}
-			buf.WriteByte(' ')
-		}
-	}
-
-	// write level
-	if a := rep(nil /* groups */, slog.Any(slog.LevelKey, r.Level)); a.Key != "" {
-		val := a.Value.Resolve()
-		if val.Kind() == slog.KindAny {
-			if lvlVal, ok := val.Any().(slog.Level); ok {
-				this.appendLevel(buf, lvlVal)
-			} else {
-				this.appendValue(buf, val, false)
-			}
-		} else {
-			this.appendValue(buf, val, false)
-		}
-		buf.WriteByte(' ')
-	}
-
-	// write source
-	if this.opts.AddSource {
-		fs := runtime.CallersFrames([]uintptr{r.PC})
-		f, _ := fs.Next()
-		if f.File != "" {
-			src := &slog.Source{
-				Function: f.Function,
-				File:     f.File,
-				Line:     f.Line,
-			}
-
-			if a := rep(nil /* groups */, slog.Any(slog.SourceKey, src)); a.Key != "" {
-				val := a.Value.Resolve()
-				this.appendValue(buf, val, false)
-				buf.WriteByte(' ')
-			}
-		}
-	}
-
-	// write message
-	if a := rep(nil /* groups */, slog.String(slog.MessageKey, r.Message)); a.Key != "" {
-		val := a.Value.Resolve()
-		this.appendValue(buf, val, false)
-		buf.WriteByte(' ')
-	}
-
-	// write handler attributes
-	if len(this.attrsPrefix) > 0 {
-		buf.WriteString(this.attrsPrefix)
-	}
-
-	// write attributes
+	groupPrefix := strings.Join(this.groups, ".")
 	r.Attrs(func(attr slog.Attr) bool {
-		this.appendAttr(buf, attr, this.groupPrefix, this.groups)
+		collectAttrRecursive(&allAttrs, attr, groupPrefix, this.groups, rep)
 		return true
 	})
 
-	/*
-		if len(*buf) == 0 {
-			return nil
+	ctx := renderContext{
+		record:       r,
+		rep:          rep,
+		addSource:    this.opts.AddSource,
+		isColor:      this.IsColor(),
+		hasGrpInTree: this.pattern.hasGrpInTree,
+	}
+
+	if this.pattern.hasGrpInTree {
+		for _, a := range allAttrs {
+			if a.group == "" {
+				ctx.topAttrs = append(ctx.topAttrs, a)
+			}
 		}
-	*/
-	(*buf)[len(*buf)-1] = '\n' // replace last space with newline
+	} else {
+		ctx.topAttrs = allAttrs
+	}
+
+	groupMap := make(map[string]int)
+	for _, a := range allAttrs {
+		if a.group != "" {
+			if idx, found := groupMap[a.group]; found {
+				ctx.groups[idx].attrs = append(ctx.groups[idx].attrs, a.attr)
+			} else {
+				groupMap[a.group] = len(ctx.groups)
+				ctx.groups = append(ctx.groups, groupInfo{
+					name:  a.group,
+					attrs: []slog.Attr{a.attr},
+				})
+			}
+		}
+	}
+
+	this.pattern.root.Render(&ctx, buf)
+
+	if buf.Len() == 0 || (*buf)[buf.Len()-1] != '\n' {
+		buf.WriteByte('\n')
+	}
 
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -182,125 +178,57 @@ func (this *Handler) Handle(_ context.Context, r slog.Record) error {
 	return err
 }
 
+// WithAttrs returns a new Handler with the given attributes appended to the handler's pre-formatted attributes.
 func (this *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return this
 	}
 	h2 := this.clone()
-
-	buf := NewBuffer()
-	defer buf.Free()
-
-	// write attributes to buffer
+	rep := this.ReplaceAttr()
+	groupPrefix := strings.Join(this.groups, ".")
 	for _, attr := range attrs {
-		this.appendAttr(buf, attr, this.groupPrefix, this.groups)
+		collectAttrRecursive(&h2.attrs, attr, groupPrefix, this.groups, rep)
 	}
-	h2.attrsPrefix = this.attrsPrefix + string(*buf)
 	return h2
 }
 
+// WithGroup returns a new Handler with the given group name appended to the current group hierarchy.
 func (this *Handler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return this
 	}
 	h2 := this.clone()
-	h2.groupPrefix += name + "."
 	h2.groups = append(h2.groups, name)
 	return h2
 }
 
-//nolint:errcheck //ignoring buffer write errors
-func (this *Handler) appendAttr(buf *Buffer, attr slog.Attr, groupsPrefix string, groups []string) {
+func collectAttrRecursive(all *[]collectedAttr, attr slog.Attr, groupPrefix string, groups []string, rep func([]string, slog.Attr) slog.Attr) {
 	attr.Value = attr.Value.Resolve()
-	if rep := this.opts.ReplaceAttr; rep != nil && attr.Value.Kind() != slog.KindGroup {
+	if rep != nil && attr.Value.Kind() != slog.KindGroup {
 		attr = rep(groups, attr)
 		attr.Value = attr.Value.Resolve()
 	}
 
-	if attr.Equal(slog.Attr{}) {
+	if attr.Equal(slog.Attr{}) || attr.Key == "" {
 		return
 	}
 
 	if attr.Value.Kind() == slog.KindGroup {
-		if attr.Key != "" {
-			groupsPrefix += attr.Key + "."
-			groups = append(groups, attr.Key)
+		newPrefix := attr.Key
+		if groupPrefix != "" {
+			newPrefix = groupPrefix + "." + attr.Key
 		}
-		for _, groupAttr := range attr.Value.Group() {
-			this.appendAttr(buf, groupAttr, groupsPrefix, groups)
+		newGroups := append(slices.Clone(groups), attr.Key)
+		for _, ga := range attr.Value.Group() {
+			collectAttrRecursive(all, ga, newPrefix, newGroups, rep)
 		}
 		return
 	}
 
-	this.appendKey(buf, attr.Key, groupsPrefix)
-	this.appendValue(buf, attr.Value, true)
-	buf.WriteByte(' ')
-}
-
-//nolint:errcheck //ignoring buffer write.
-func (this *Handler) appendKey(buf *Buffer, key, groups string) {
-	appendString(buf, groups+key, false)
-	buf.WriteByte('=')
-}
-
-func (this *Handler) appendTime(buf *Buffer, t time.Time) {
-	*buf = t.AppendFormat(*buf, "2006/01/02 15:04:05.000")
-}
-
-//nolint:errcheck //ignoring buffer write.
-func (this *Handler) appendLevel(buf *Buffer, level slog.Level) {
-	buf.WriteString(level.String())
-}
-
-func (this *Handler) appendValue(buf *Buffer, v slog.Value, quote bool) {
-	switch v.Kind() {
-	case slog.KindString:
-		appendString(buf, v.String(), quote)
-	case slog.KindInt64:
-		*buf = strconv.AppendInt(*buf, v.Int64(), 10)
-	case slog.KindUint64:
-		*buf = strconv.AppendUint(*buf, v.Uint64(), 10)
-	case slog.KindFloat64:
-		*buf = strconv.AppendFloat(*buf, v.Float64(), 'g', -1, 64)
-	case slog.KindBool:
-		*buf = strconv.AppendBool(*buf, v.Bool())
-	case slog.KindDuration:
-		appendString(buf, v.Duration().String(), quote)
-	case slog.KindTime:
-		appendString(buf, v.Time().String(), quote)
-	case slog.KindAny:
-		defer func() {
-			// Copied from log/slog/handler.go.
-			if r := recover(); r != nil {
-				// If it panics with a nil pointer, the most likely cases are
-				// an encoding.TextMarshaler or error fails to guard against nil,
-				// in which case "<nil>" seems to be the feasible choice.
-				//
-				// Adapted from the code in fmt/print.go.
-				if v := reflect.ValueOf(v.Any()); v.Kind() == reflect.Pointer && v.IsNil() {
-					appendString(buf, "<nil>", false)
-					return
-				}
-
-				// Otherwise just print the original panic message.
-				appendString(buf, fmt.Sprintf("!PANIC: %v", r), true)
-			}
-		}()
-
-		switch cv := v.Any().(type) {
-		case encoding.TextMarshaler:
-			data, err := cv.MarshalText()
-			if err != nil {
-				break
-			}
-			appendString(buf, string(data), quote)
-		case *slog.Source:
-			appendSource(buf, cv)
-		default:
-			appendString(buf, fmt.Sprintf("%+v", cv), quote)
-		}
-	default:
-	}
+	*all = append(*all, collectedAttr{
+		attr:  attr,
+		group: groupPrefix,
+	})
 }
 
 //nolint:errcheck,revive //ignoring buffer write.

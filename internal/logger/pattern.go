@@ -1,0 +1,972 @@
+package logger
+
+import (
+	"encoding"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"golang.org/x/term"
+)
+
+const (
+	// DefaultFormat is the default log pattern format using colored output.
+	DefaultFormat = "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
+	// TextFormat is the standard slog logfmt-style text pattern.
+	TextFormat = "%time(%k=%v )%level(%k=%v) %source(%k=%v )%msg(%k=%qv)%attr( %k=%qv)%grp(%attr( %g.%k=%qv))"
+	// JSONFormat is the standard JSON log format.
+	JSONFormat = `{%time(%qk:%qv,)%level(%qk:%qv)%source(,%qk:%qv),%msg(%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
+	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	// GELFFormat is the Graylog Extended Log Format (GELF) v1.1 JSON format.
+	GELFFormat = `{"version":"1.1","host":"localhost",%time("timestamp":%"UnixMilli"v,)%level("level":%qv),%msg("short_message":%qv)%source(,"_source":%qv)%attr(,"_%k":%qv)%grp(,"_%g":{%attr(%qk:%qv%nl(,))})}`
+	// LogstashFormat is the Logstash JSON event format.
+	LogstashFormat = `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	keyTime        = "time"
+	keyLevel       = "level"
+	keyMsg         = "msg"
+	keySource      = "source"
+	ansiReset      = "\033[0m"
+)
+
+type collectedAttr struct {
+	attr  slog.Attr
+	group string
+}
+
+type groupInfo struct {
+	name  string
+	attrs []slog.Attr
+}
+
+// PatternNode represents a node in the compiled log pattern AST.
+type PatternNode interface {
+	Render(ctx *renderContext, buf *Buffer)
+}
+
+// LiteralNode renders fixed static text.
+type LiteralNode struct {
+	text string
+}
+
+func (n *LiteralNode) Render(_ *renderContext, buf *Buffer) {
+	//nolint:errcheck // buffer write cannot fail
+	buf.WriteString(n.text)
+}
+
+// CompositeNode renders an ordered sequence of child pattern nodes.
+type CompositeNode struct {
+	nodes []PatternNode
+}
+
+func (n *CompositeNode) Render(ctx *renderContext, buf *Buffer) {
+	for _, child := range n.nodes {
+		child.Render(ctx, buf)
+	}
+}
+
+// ColorNode wraps an inner pattern node with ANSI mode and color styling.
+type ColorNode struct {
+	inner         PatternNode
+	levelCodes    map[int]string
+	staticCode    string
+	hasColor      bool
+	isValid       bool
+	hasLevelInner bool
+}
+
+func newColorNode(inner PatternNode, spec string) *ColorNode {
+	n := &ColorNode{
+		inner:         inner,
+		hasLevelInner: hasLevelNode(inner),
+	}
+	n.parseSpec(spec)
+	return n
+}
+
+func (n *ColorNode) parseSpec(spec string) {
+	trimmed := strings.TrimSpace(spec)
+	if trimmed == "" {
+		n.isValid = true
+		n.buildCodes(nil, 0)
+		return
+	}
+
+	parts := strings.Split(trimmed, ",")
+	var modes []int
+	var colorCode int
+	hasColor := false
+	recognizedAny := false
+
+	for _, p := range parts {
+		token := strings.ToLower(strings.TrimSpace(p))
+		token = strings.ReplaceAll(token, "-", "_")
+		if token == "" {
+			continue
+		}
+
+		if mode, ok := ansiModes[token]; ok {
+			recognizedAny = true
+			if !slices.Contains(modes, mode) {
+				modes = append(modes, mode)
+			}
+			continue
+		}
+
+		if code, ok := colorCodes[token]; ok {
+			recognizedAny = true
+			hasColor = true
+			colorCode = code
+			continue
+		}
+	}
+
+	if !recognizedAny {
+		n.isValid = false
+		return
+	}
+
+	n.isValid = true
+	n.hasColor = hasColor
+
+	var finalModes []int
+	for _, m := range modes {
+		if m != 0 {
+			finalModes = append(finalModes, m)
+		}
+	}
+	if len(finalModes) == 0 && slices.Contains(modes, 0) {
+		finalModes = []int{0}
+	}
+
+	n.buildCodes(finalModes, colorCode)
+}
+
+func (n *ColorNode) buildCodes(modes []int, colorCode int) {
+	if n.hasColor {
+		n.staticCode = buildAnsiCode(modes, colorCode)
+	} else {
+		n.staticCode = buildAnsiCode(modes, 0)
+		n.levelCodes = map[int]string{
+			31: buildAnsiCode(modes, 31),
+			32: buildAnsiCode(modes, 32),
+			33: buildAnsiCode(modes, 33),
+			34: buildAnsiCode(modes, 34),
+			36: buildAnsiCode(modes, 36),
+			0:  buildAnsiCode(modes, 0),
+		}
+	}
+}
+
+func (n *ColorNode) Render(ctx *renderContext, buf *Buffer) {
+	if !ctx.isColor {
+		n.inner.Render(ctx, buf)
+		return
+	}
+	tmp := NewBuffer()
+	defer tmp.Free()
+	n.inner.Render(ctx, tmp)
+	if tmp.Len() == 0 {
+		return
+	}
+	startCode, endCode := n.ansiCodes(ctx)
+	if startCode == "" {
+		//nolint:errcheck // buffer write cannot fail
+		buf.Write(*tmp)
+		return
+	}
+	//nolint:errcheck // buffer writes cannot fail
+	buf.WriteString(startCode)
+	//nolint:errcheck // buffer writes cannot fail
+	buf.Write(*tmp)
+	//nolint:errcheck // buffer writes cannot fail
+	buf.WriteString(endCode)
+}
+
+func (n *ColorNode) ansiCodes(ctx *renderContext) (startCode, endCode string) {
+	if !n.isValid {
+		return "", ""
+	}
+	if n.hasColor {
+		return n.staticCode, ansiReset
+	}
+	isForLevel := n.hasLevelInner || (ctx.isKey && ctx.currentAttr.Key == slog.LevelKey)
+	if isForLevel {
+		c := levelColorCode(ctx.record.Level)
+		return n.levelCodes[c], ansiReset
+	}
+	return n.staticCode, ansiReset
+}
+
+// KeyNode renders standard slog record attributes (time, level, source, message).
+type KeyNode struct {
+	inner PatternNode
+	key   string
+}
+
+func (n *KeyNode) Render(ctx *renderContext, buf *Buffer) {
+	if n.key == keySource && !ctx.addSource {
+		return
+	}
+	var a slog.Attr
+	switch n.key {
+	case keyTime:
+		if ctx.record.Time.IsZero() {
+			return
+		}
+		val := ctx.record.Time.Round(0)
+		if hasTimeFormat(n.inner) {
+			a = slog.Time(slog.TimeKey, val)
+		} else {
+			a = ctx.rep(nil, slog.Time(slog.TimeKey, val))
+		}
+	case keyLevel:
+		a = ctx.rep(nil, slog.Any(slog.LevelKey, ctx.record.Level))
+	case keySource:
+		if ctx.record.PC == 0 {
+			return
+		}
+		fs := runtime.CallersFrames([]uintptr{ctx.record.PC})
+		f, _ := fs.Next()
+		if f.File == "" {
+			return
+		}
+		src := &slog.Source{
+			Function: f.Function,
+			File:     f.File,
+			Line:     f.Line,
+		}
+		a = ctx.rep(nil, slog.Any(slog.SourceKey, src))
+	case keyMsg:
+		a = ctx.rep(nil, slog.String(slog.MessageKey, ctx.record.Message))
+	default:
+		return
+	}
+
+	if a.Key == "" {
+		return
+	}
+
+	keyCtx := *ctx
+	keyCtx.currentAttr = a
+	keyCtx.isKey = true
+	n.inner.Render(&keyCtx, buf)
+}
+
+// AttrNode renders structured log attributes.
+type AttrNode struct {
+	inner PatternNode
+}
+
+func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
+	if ctx.inGroup {
+		attrs := ctx.groupAttrs
+		for i, attr := range attrs {
+			attrCtx := *ctx
+			attrCtx.currentAttr = attr
+			attrCtx.isKey = false
+			attrCtx.isLast = (i == len(attrs)-1)
+			n.inner.Render(&attrCtx, buf)
+		}
+		return
+	}
+
+	attrs := ctx.topAttrs
+	for i, item := range attrs {
+		attrCtx := *ctx
+		attrCtx.currentAttr = item.attr
+		attrCtx.currentGroup = item.group
+		attrCtx.isKey = false
+		attrCtx.isLast = (i == len(attrs)-1)
+		n.inner.Render(&attrCtx, buf)
+	}
+}
+
+// GroupNode renders attribute groups.
+type GroupNode struct {
+	inner PatternNode
+}
+
+func (n *GroupNode) Render(ctx *renderContext, buf *Buffer) {
+	groups := ctx.groups
+	for i, grp := range groups {
+		grpCtx := *ctx
+		grpCtx.inGroup = true
+		grpCtx.currentGroup = grp.name
+		grpCtx.groupAttrs = grp.attrs
+		grpCtx.isLast = (i == len(groups)-1)
+		n.inner.Render(&grpCtx, buf)
+	}
+}
+
+// NotLastNode renders text only if the current element is not the last one in an iteration.
+type NotLastNode struct {
+	text string
+}
+
+func (n *NotLastNode) Render(ctx *renderContext, buf *Buffer) {
+	if !ctx.isLast {
+		//nolint:errcheck // buffer write cannot fail
+		buf.WriteString(n.text)
+	}
+}
+
+// ValueFormatNode formats attribute keys, values, and groups with optional padding, truncation, quoting, or custom layouts.
+type ValueFormatNode struct {
+	target     string
+	timeFormat string
+	minWidth   int
+	maxWidth   int
+	leftAlign  bool
+	hasMax     bool
+	truncEnd   bool
+}
+
+func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
+	var s string
+	switch n.target {
+	case "k":
+		s = ctx.currentAttr.Key
+	case "qk":
+		s = strconv.Quote(ctx.currentAttr.Key)
+	case "v":
+		s = n.formatTimeOrValue(ctx, false)
+	case "qv":
+		s = n.formatTimeOrValue(ctx, true)
+	case "g":
+		s = ctx.currentGroup
+	case "qg":
+		if ctx.currentGroup != "" {
+			s = strconv.Quote(ctx.currentGroup)
+		}
+	default:
+	}
+	s = applyFormatModifier(s, n.minWidth, n.leftAlign, n.hasMax, n.maxWidth, n.truncEnd)
+	//nolint:errcheck // buffer write cannot fail
+	buf.WriteString(s)
+}
+
+//nolint:revive // quote flag differentiates between %v and %qv
+func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) string {
+	if n.timeFormat == "" {
+		return ctx.formatCurrentValue(quote)
+	}
+	var formatted string
+	switch {
+	case ctx.isKey && ctx.currentAttr.Key == slog.TimeKey:
+		formatted = formatTime(ctx.record.Time, n.timeFormat)
+	case ctx.currentAttr.Value.Kind() == slog.KindTime:
+		formatted = formatTime(ctx.currentAttr.Value.Time(), n.timeFormat)
+	default:
+		formatted = ctx.formatCurrentValue(false)
+	}
+	if quote {
+		return strconv.Quote(formatted)
+	}
+	return formatted
+}
+
+func formatTime(t time.Time, layout string) string {
+	switch strings.ToLower(strings.TrimSpace(layout)) {
+	case "unix":
+		return strconv.FormatInt(t.Unix(), 10)
+	case "unixmilli", "unix_milli":
+		return fmt.Sprintf("%d.%03d", t.Unix(), t.Nanosecond()/1_000_000)
+	case "unixmicro", "unix_micro":
+		return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1_000)
+	case "unixnano", "unix_nano":
+		return fmt.Sprintf("%d.%09d", t.Unix(), t.Nanosecond())
+	case "rfc3339", "iso8601", "iso_8601", "iso-8601":
+		return t.Format(time.RFC3339)
+	case "rfc3339nano", "rfc3339_nano":
+		return t.Format(time.RFC3339Nano)
+	case "datetime", "date_time":
+		return t.Format(time.DateTime)
+	case "dateonly", "date_only":
+		return t.Format(time.DateOnly)
+	case "timeonly", "time_only":
+		return t.Format(time.TimeOnly)
+	case "ansic":
+		return t.Format(time.ANSIC)
+	case "unixdate", "unix_date":
+		return t.Format(time.UnixDate)
+	case "rubydate", "ruby_date":
+		return t.Format(time.RubyDate)
+	case "rfc822":
+		return t.Format(time.RFC822)
+	case "rfc822z":
+		return t.Format(time.RFC822Z)
+	case "rfc850":
+		return t.Format(time.RFC850)
+	case "rfc1123":
+		return t.Format(time.RFC1123)
+	case "rfc1123z":
+		return t.Format(time.RFC1123Z)
+	case "kitchen":
+		return t.Format(time.Kitchen)
+	case "stamp":
+		return t.Format(time.Stamp)
+	case "stampmilli", "stamp_milli":
+		return t.Format(time.StampMilli)
+	case "stampmicro", "stamp_micro":
+		return t.Format(time.StampMicro)
+	case "stampnano", "stamp_nano":
+		return t.Format(time.StampNano)
+	default:
+		return t.Format(layout)
+	}
+}
+
+type compiledPattern struct {
+	root         PatternNode
+	hasGrpInTree bool
+}
+
+func compilePattern(format string) *compiledPattern {
+	root := parsePattern(format)
+	return &compiledPattern{
+		root:         root,
+		hasGrpInTree: hasGroupNode(root),
+	}
+}
+
+func hasGroupNode(node PatternNode) bool {
+	switch n := node.(type) {
+	case *GroupNode:
+		return true
+	case *CompositeNode:
+		return slices.ContainsFunc(n.nodes, hasGroupNode)
+	case *ColorNode:
+		return hasGroupNode(n.inner)
+	case *KeyNode:
+		return hasGroupNode(n.inner)
+	case *AttrNode:
+		return hasGroupNode(n.inner)
+	default:
+		return false
+	}
+}
+
+func hasLevelNode(node PatternNode) bool {
+	if node == nil {
+		return false
+	}
+	switch n := node.(type) {
+	case *KeyNode:
+		if n.key == keyLevel {
+			return true
+		}
+		return hasLevelNode(n.inner)
+	case *CompositeNode:
+		return slices.ContainsFunc(n.nodes, hasLevelNode)
+	case *ColorNode:
+		return hasLevelNode(n.inner)
+	case *AttrNode:
+		return hasLevelNode(n.inner)
+	case *GroupNode:
+		return hasLevelNode(n.inner)
+	default:
+		return false
+	}
+}
+
+func hasTimeFormat(node PatternNode) bool {
+	switch n := node.(type) {
+	case *ValueFormatNode:
+		return n.timeFormat != ""
+	case *CompositeNode:
+		return slices.ContainsFunc(n.nodes, hasTimeFormat)
+	case *ColorNode:
+		return hasTimeFormat(n.inner)
+	case *KeyNode:
+		return hasTimeFormat(n.inner)
+	case *AttrNode:
+		return hasTimeFormat(n.inner)
+	case *GroupNode:
+		return hasTimeFormat(n.inner)
+	default:
+		return false
+	}
+}
+
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(qk|qv|qg|k|v|g)`)
+
+func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
+	m := formatSpecRegex.FindStringSubmatch(s)
+	if m == nil {
+		return nil, 0, false
+	}
+	matchedLen := len(m[0])
+	timeFormat := m[1]
+	if timeFormat == "" {
+		timeFormat = m[6]
+	}
+	leftAlign := m[2] == "-"
+	minWidth := 0
+	if m[3] != "" {
+		if val, err := strconv.Atoi(m[3]); err == nil {
+			minWidth = val
+		}
+	}
+	truncEnd := m[4] == "-"
+	hasMax := false
+	maxWidth := 0
+	if m[5] != "" {
+		if val, err := strconv.Atoi(m[5]); err == nil {
+			hasMax = true
+			maxWidth = val
+		}
+	}
+	target := m[7]
+	if target != "v" && target != "qv" {
+		timeFormat = ""
+	}
+	return &ValueFormatNode{
+		target:     target,
+		timeFormat: timeFormat,
+		minWidth:   minWidth,
+		leftAlign:  leftAlign,
+		hasMax:     hasMax,
+		maxWidth:   maxWidth,
+		truncEnd:   truncEnd,
+	}, matchedLen, true
+}
+
+func matchKeyPrefix(s string) (key string, prefixLen int, ok bool) {
+	prefixes := []struct {
+		prefix string
+		key    string
+	}{
+		{"%time(", keyTime},
+		{"%level(", keyLevel},
+		{"%msg(", keyMsg},
+		{"%source(", keySource},
+		{"%t(", keyTime},
+		{"%l(", keyLevel},
+		{"%m(", keyMsg},
+		{"%s(", keySource},
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p.prefix) {
+			return p.key, len(p.prefix), true
+		}
+	}
+	return "", 0, false
+}
+
+func findMatchingParen(s string, openParenIdx int) (int, bool) {
+	if openParenIdx >= len(s) || s[openParenIdx] != '(' {
+		return -1, false
+	}
+	depth := 1
+	for i := openParenIdx + 1; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+		default:
+		}
+	}
+	return -1, false
+}
+
+func parsePattern(format string) PatternNode {
+	var nodes []PatternNode
+	i := 0
+	for i < len(format) {
+		if format[i] != '%' {
+			next := strings.IndexByte(format[i:], '%')
+			if next == -1 {
+				nodes = append(nodes, &LiteralNode{text: format[i:]})
+				break
+			}
+			nodes = append(nodes, &LiteralNode{text: format[i : i+next]})
+			i += next
+			continue
+		}
+
+		if strings.HasPrefix(format[i:], "%%") {
+			nodes = append(nodes, &LiteralNode{text: "%"})
+			i += 2
+			continue
+		}
+
+		if strings.HasPrefix(format[i:], "%clr(") {
+			closeParen, ok := findMatchingParen(format, i+4)
+			if ok {
+				innerStr := format[i+5 : closeParen]
+				i = closeParen + 1
+				color := ""
+				if i < len(format) && format[i] == '{' {
+					closeBrace := strings.IndexByte(format[i:], '}')
+					if closeBrace != -1 {
+						color = format[i+1 : i+closeBrace]
+						i = i + closeBrace + 1
+					}
+				}
+				innerNode := parsePattern(innerStr)
+				nodes = append(nodes, newColorNode(innerNode, color))
+				continue
+			}
+		}
+
+		if key, prefixLen, ok := matchKeyPrefix(format[i:]); ok {
+			closeParen, ok2 := findMatchingParen(format, i+prefixLen-1)
+			if ok2 {
+				innerStr := format[i+prefixLen : closeParen]
+				i = closeParen + 1
+				innerNode := parsePattern(innerStr)
+				nodes = append(nodes, &KeyNode{key: key, inner: innerNode})
+				continue
+			}
+		}
+
+		if strings.HasPrefix(format[i:], "%attr(") {
+			closeParen, ok := findMatchingParen(format, i+5)
+			if ok {
+				innerStr := format[i+6 : closeParen]
+				i = closeParen + 1
+				innerNode := parsePattern(innerStr)
+				nodes = append(nodes, &AttrNode{inner: innerNode})
+				continue
+			}
+		}
+
+		if strings.HasPrefix(format[i:], "%grp(") {
+			closeParen, ok := findMatchingParen(format, i+4)
+			if ok {
+				innerStr := format[i+5 : closeParen]
+				i = closeParen + 1
+				innerNode := parsePattern(innerStr)
+				nodes = append(nodes, &GroupNode{inner: innerNode})
+				continue
+			}
+		}
+
+		if strings.HasPrefix(format[i:], "%nl(") {
+			closeParen, ok := findMatchingParen(format, i+3)
+			if ok {
+				text := format[i+4 : closeParen]
+				i = closeParen + 1
+				nodes = append(nodes, &NotLastNode{text: text})
+				continue
+			}
+		}
+
+		if spec, matchedLen, ok := matchFormatSpec(format[i:]); ok {
+			nodes = append(nodes, spec)
+			i += matchedLen
+			continue
+		}
+
+		nodes = append(nodes, &LiteralNode{text: "%"})
+		i++
+	}
+
+	if len(nodes) == 1 {
+		return nodes[0]
+	}
+	return &CompositeNode{nodes: nodes}
+}
+
+type renderContext struct {
+	currentAttr  slog.Attr
+	rep          func(groups []string, a slog.Attr) slog.Attr
+	currentGroup string
+	record       slog.Record
+	groupAttrs   []slog.Attr
+	groups       []groupInfo
+	topAttrs     []collectedAttr
+	hasGrpInTree bool
+	addSource    bool
+	isColor      bool
+	isKey        bool
+	isLast       bool
+	inGroup      bool
+}
+
+//nolint:revive // quote flag is required to differentiate between %v and %qv
+func (ctx *renderContext) formatCurrentValue(quote bool) string {
+	if ctx.isKey {
+		v := ctx.currentAttr.Value.Resolve()
+		switch ctx.currentAttr.Key {
+		case slog.TimeKey:
+			if v.Kind() == slog.KindString {
+				if quote {
+					return strconv.Quote(v.String())
+				}
+				return v.String()
+			}
+			if v.Kind() == slog.KindTime {
+				formatted := v.Time().Format(time.RFC3339)
+				if quote {
+					return strconv.Quote(formatted)
+				}
+				return formatted
+			}
+			s := v.String()
+			if quote {
+				return strconv.Quote(s)
+			}
+			return s
+		case slog.LevelKey:
+			if v.Kind() == slog.KindString {
+				if quote {
+					return strconv.Quote(v.String())
+				}
+				return v.String()
+			}
+			if lvl, ok := v.Any().(slog.Level); ok {
+				var s string
+				switch lvl {
+				case LevelFatal:
+					s = "FATAL"
+				case LevelTrace:
+					s = "TRACE"
+				default:
+					s = lvl.String()
+				}
+				if quote {
+					return strconv.Quote(s)
+				}
+				return s
+			}
+			s := v.String()
+			if quote {
+				return strconv.Quote(s)
+			}
+			return s
+		case slog.SourceKey:
+			if v.Kind() == slog.KindString {
+				if quote {
+					return strconv.Quote(v.String())
+				}
+				return v.String()
+			}
+			if src, ok := v.Any().(*slog.Source); ok {
+				s := fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+				if quote {
+					return strconv.Quote(s)
+				}
+				return s
+			}
+			s := fmt.Sprintf("%+v", v.Any())
+			if quote {
+				return strconv.Quote(s)
+			}
+			return s
+		case slog.MessageKey:
+			if quote {
+				return strconv.Quote(v.String())
+			}
+			return v.String()
+		default:
+			return formatValue(v, quote)
+		}
+	}
+	return formatValue(ctx.currentAttr.Value, quote)
+}
+
+//nolint:revive // boolean flags control left alignment, maximum length, and truncation direction
+func applyFormatModifier(s string, minWidth int, leftAlign, hasMax bool, maxWidth int, truncEnd bool) string {
+	runes := []rune(s)
+	if hasMax && len(runes) > maxWidth {
+		if truncEnd {
+			runes = runes[:maxWidth]
+		} else {
+			runes = runes[len(runes)-maxWidth:]
+		}
+		s = string(runes)
+	}
+	if len(runes) < minWidth {
+		padding := strings.Repeat(" ", minWidth-len(runes))
+		if leftAlign {
+			s += padding
+		} else {
+			s = padding + s
+		}
+	}
+	return s
+}
+
+func formatValue(v slog.Value, quote bool) string {
+	buf := NewBuffer()
+	defer buf.Free()
+	appendFormattedValue(buf, v, quote)
+	return string(*buf)
+}
+
+//nolint:revive // quote controls whether values like strings are quoted
+func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
+	switch v.Kind() {
+	case slog.KindString:
+		appendString(buf, v.String(), quote)
+	case slog.KindInt64:
+		*buf = strconv.AppendInt(*buf, v.Int64(), 10)
+	case slog.KindUint64:
+		*buf = strconv.AppendUint(*buf, v.Uint64(), 10)
+	case slog.KindFloat64:
+		*buf = strconv.AppendFloat(*buf, v.Float64(), 'g', -1, 64)
+	case slog.KindBool:
+		*buf = strconv.AppendBool(*buf, v.Bool())
+	case slog.KindDuration:
+		appendString(buf, v.Duration().String(), quote)
+	case slog.KindTime:
+		appendString(buf, v.Time().String(), quote)
+	case slog.KindAny:
+		if v.Any() == nil {
+			if quote {
+				//nolint:errcheck // buffer write cannot fail
+				buf.WriteString("null")
+			} else {
+				//nolint:errcheck // buffer write cannot fail
+				buf.WriteString("<nil>")
+			}
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				if val := reflect.ValueOf(v.Any()); val.Kind() == reflect.Pointer && val.IsNil() {
+					if quote {
+						//nolint:errcheck // buffer write cannot fail
+						buf.WriteString("null")
+					} else {
+						appendString(buf, "<nil>", false)
+					}
+					return
+				}
+				appendString(buf, fmt.Sprintf("!PANIC: %v", r), true)
+			}
+		}()
+
+		switch cv := v.Any().(type) {
+		case encoding.TextMarshaler:
+			data, err := cv.MarshalText()
+			if err != nil {
+				break
+			}
+			appendString(buf, string(data), quote)
+		case *slog.Source:
+			appendSource(buf, cv)
+		default:
+			val := reflect.ValueOf(cv)
+			if val.Kind() == reflect.Pointer && val.IsNil() {
+				if quote {
+					//nolint:errcheck // buffer write cannot fail
+					buf.WriteString("null")
+				} else {
+					appendString(buf, "<nil>", false)
+				}
+				return
+			}
+			appendString(buf, fmt.Sprintf("%+v", cv), quote)
+		}
+	default:
+	}
+}
+
+var ansiModes = map[string]int{
+	"normal":    0,
+	"bold":      1,
+	"faint":     2,
+	"italic":    3,
+	"underline": 4,
+	"blinky":    5,
+	"blink":     5,
+}
+
+var colorCodes = map[string]int{
+	"black":          30,
+	"red":            31,
+	"green":          32,
+	"yellow":         33,
+	"blue":           34,
+	"magenta":        35,
+	"cyan":           36,
+	"white":          37,
+	"bright_black":   90,
+	"bright_red":     91,
+	"bright_green":   92,
+	"bright_yellow":  93,
+	"bright_blue":    94,
+	"bright_magenta": 95,
+	"bright_cyan":    96,
+	"bright_white":   97,
+}
+
+func levelColorCode(level slog.Level) int {
+	switch {
+	case level >= LevelError:
+		return 31
+	case level >= LevelWarn:
+		return 33
+	case level >= LevelInfo:
+		return 32
+	case level >= LevelDebug:
+		return 36
+	default:
+		return 0
+	}
+}
+
+//nolint:errcheck // strings.Builder write cannot fail
+func buildAnsiCode(modes []int, color int) string {
+	if len(modes) == 0 && color <= 0 {
+		return "\033[0m"
+	}
+	var sb strings.Builder
+	sb.WriteString("\033[")
+	for i, m := range modes {
+		if i > 0 {
+			sb.WriteByte(';')
+		}
+		sb.WriteString(strconv.Itoa(m))
+	}
+	if color > 0 {
+		if len(modes) > 0 {
+			sb.WriteByte(';')
+		}
+		sb.WriteString(strconv.Itoa(color))
+	}
+	sb.WriteByte('m')
+	return sb.String()
+}
+
+func isTerminal(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	for _, arg := range os.Args {
+		trimmed := strings.TrimLeft(arg, "-")
+		if trimmed == "no-color" || trimmed == "ginkgo.no-color" ||
+			strings.HasPrefix(trimmed, "no-color=") || strings.HasPrefix(trimmed, "ginkgo.no-color=") {
+			return false
+		}
+	}
+	if os.Getenv("TERM") == "dumb" && os.Getenv("COLORTERM") == "" {
+		return false
+	}
+	if _, ok := w.(interface {
+		TeeTo(io.Writer)
+		ClearTeeWriters()
+	}); ok {
+		return true
+	}
+	if f, ok := w.(interface{ Fd() uintptr }); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
+}

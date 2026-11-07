@@ -28,7 +28,7 @@ var _ = BeforeSuite(func() {
 	GetLogger().SetOutput(GinkgoWriter)
 	GetLogger().SetLogLevel(logger.LevelDebug)
 	GetLogger().SetDefault()
-	cfg := map[string]any{"handler": "DEFAULT", "level": "DEBUG", "source": "true"}
+	cfg := map[string]any{"handler": "DEFAULT", "level": "DEBUG", "source": "true", "color": "AUTO"}
 	Expect(GetContainer().LoadDefaultConfigAt(cfg, "rays.logging")).NotTo(HaveOccurred())
 })
 
