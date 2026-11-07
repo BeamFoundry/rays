@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -963,5 +964,301 @@ var _ = Describe("ReduceFunctionName", func() {
 				Expect(logger.ReduceFunctionName(k)).To(Equal(v))
 			}
 		}
+	})
+})
+
+type dummySetColorOnlyHandler struct {
+	color bool
+}
+
+func (d *dummySetColorOnlyHandler) Enabled(context.Context, slog.Level) bool  { return true }
+func (d *dummySetColorOnlyHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d *dummySetColorOnlyHandler) WithAttrs([]slog.Attr) slog.Handler        { return d }
+func (d *dummySetColorOnlyHandler) WithGroup(string) slog.Handler             { return d }
+func (d *dummySetColorOnlyHandler) SetColor(c bool)                           { d.color = c }
+
+var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
+	var buf *bytes.Buffer
+	testTime := time.Date(2026, 11, 7, 12, 0, 0, 123456789, time.UTC)
+
+	BeforeEach(func() {
+		buf = &bytes.Buffer{}
+	})
+
+	It("covers empty format strings in NewHandlerWithFormat and SetFormat", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "")
+		Expect(h.GetFormat()).To(Equal(logger.DefaultFormat))
+		h.SetFormat("")
+		Expect(h.GetFormat()).To(Equal(logger.DefaultFormat))
+	})
+
+	It("covers Logger fallback when handler does not implement interfaces", func() {
+		lg := logger.GetLogger().Clone()
+		defer lg.Reset()
+
+		lg.SetHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+			return slog.NewTextHandler(w, opts)
+		})
+		lg.SetFormat("custom_format")
+		Expect(lg.GetFormat()).To(Equal("custom_format"))
+
+		lg.SetColor(true)
+		Expect(lg.IsColor()).To(BeTrue())
+
+		lg.EnableColor()
+		Expect(lg.IsColor()).To(BeTrue()) // output is GinkgoWriter (terminal)
+
+		// Handler that only implements SetColor(bool) without EnableColor()
+		dummy := &dummySetColorOnlyHandler{}
+		lg.SetHandler(func(io.Writer, *slog.HandlerOptions) slog.Handler {
+			return dummy
+		})
+		lg.EnableColor()
+		Expect(dummy.color).To(BeTrue())
+
+		// Clone with format and color preserved
+		lg.SetColor(false)
+		cloned := lg.Clone()
+		Expect(cloned.IsColor()).To(BeFalse())
+	})
+
+	It("covers all predefined time layouts in formatTime", func() {
+		layouts := []string{
+			"unix", "unixmilli", "unixmicro", "unixnano",
+			"rfc3339", "rfc3339nano", "datetime", "dateonly", "timeonly",
+			"ansic", "unixdate", "rubydate", "rfc822", "rfc822z", "rfc850",
+			"rfc1123", "rfc1123z", "kitchen", "stamp", "stampmilli", "stampmicro", "stampnano",
+			"2006-01-02 15:04:05",
+		}
+		for _, layout := range layouts {
+			h := logger.NewHandlerWithFormat(buf, nil, fmt.Sprintf("%%time(%%%qv)\n", layout))
+			r := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "test"}
+			Expect(h.Handle(context.Background(), r)).To(Succeed())
+			Expect(buf.Len()).To(BeNumerically(">", 0))
+			buf.Reset()
+		}
+	})
+
+	It("covers time formatting on slog.Attr values and non-time values", func() {
+		// slog.KindTime attr formatted with time layout (%v and %qv)
+		h := logger.NewHandlerWithFormat(buf, nil, "%attr(%k=%\x22RFC3339\x22v %k=%\x22RFC3339\x22qv)\n")
+		r := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "test"}
+		r.Add(slog.Time("created", testTime))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("created=2026-11-07T12:00:00Z"))
+		Expect(buf.String()).To(ContainSubstring("created=\"2026-11-07T12:00:00Z\""))
+
+		// Non-time attr with time layout fallback
+		buf.Reset()
+		r2 := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "test"}
+		r2.Add(slog.String("str_key", "hello"))
+		Expect(h.Handle(context.Background(), r2)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("str_key=hello"))
+	})
+
+	It("covers KeyNode and ReplaceAttr edge cases", func() {
+		// Zero time in record
+		h := logger.NewHandlerWithFormat(buf, nil, "%time(%v)%msg(%v)\n")
+		rZeroTime := slog.Record{Message: "msg_only"}
+		Expect(h.Handle(context.Background(), rZeroTime)).To(Succeed())
+		Expect(buf.String()).To(Equal("msg_only\n"))
+
+		// Source with PC=0
+		buf.Reset()
+		hSource := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, "%source(%v)%msg(%v)\n")
+		rNoPC := slog.Record{Message: "no_pc", PC: 0}
+		Expect(hSource.Handle(context.Background(), rNoPC)).To(Succeed())
+		Expect(buf.String()).To(Equal("no_pc\n"))
+
+		// ReplaceAttr drops key (returns empty Attr)
+		buf.Reset()
+		optsDrop := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, _ slog.Attr) slog.Attr {
+				return slog.Attr{}
+			},
+		}
+		hDrop := logger.NewHandlerWithFormat(buf, optsDrop, "%time(%v)%level(%v)%msg(%v)\n")
+		rDrop := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "dropped"}
+		Expect(hDrop.Handle(context.Background(), rDrop)).To(Succeed())
+		Expect(buf.String()).To(Equal("\n"))
+	})
+
+	It("covers formatCurrentValue branches for string and custom types in ReplaceAttr", func() {
+		optsReplaced := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				switch a.Key {
+				case slog.TimeKey:
+					return slog.String(slog.TimeKey, "custom_time_str")
+				case slog.LevelKey:
+					return slog.String(slog.LevelKey, "custom_level_str")
+				case slog.SourceKey:
+					return slog.String(slog.SourceKey, "custom_source_str")
+				default:
+					return a
+				}
+			},
+		}
+		// Test %v and %qv with string replacements
+		h := logger.NewHandlerWithFormat(buf, optsReplaced, "%time(%qv) %level(%qv) %msg(%qv)\n")
+		r := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "test_msg"}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"custom_time_str\" \"custom_level_str\" \"test_msg\"\n"))
+
+		// Non-string, non-standard types in ReplaceAttr (e.g. ints)
+		buf.Reset()
+		optsReplacedInts := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				switch a.Key {
+				case slog.TimeKey:
+					return slog.Int(slog.TimeKey, 12345)
+				case slog.LevelKey:
+					return slog.Int(slog.LevelKey, 999)
+				case slog.SourceKey:
+					return slog.Int(slog.SourceKey, 888)
+				default:
+					return a
+				}
+			},
+		}
+		hInts := logger.NewHandlerWithFormat(buf, optsReplacedInts, "%time(%v) %level(%v) %source(%v) %time(%qv) %level(%qv) %source(%qv)\n")
+		// Provide valid PC for source
+		pc := make([]uintptr, 1)
+		runtime.Callers(1, pc)
+		Expect(hInts.Handle(context.Background(), slog.Record{Time: testTime, Level: slog.LevelInfo, PC: pc[0]})).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("12345 999 888 \"12345\" \"999\" \"888\""))
+	})
+
+	It("covers appendFormattedValue for nil, nil pointers, sources, and custom structs", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "%attr( %k=%v %k=%qv)\n")
+		r := slog.Record{Time: testTime, Level: slog.LevelInfo, Message: "attrs"}
+
+		var nilPtr *int
+		r.Add(
+			slog.Any("nil_val", nil),
+			slog.Any("nil_ptr", nilPtr),
+			slog.Any("src", &slog.Source{Function: "main.foo", File: "bar.go", Line: 99}),
+			slog.Any("obj", struct{ X int }{X: 42}),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("nil_val=<nil> nil_val=null"))
+		Expect(buf.String()).To(ContainSubstring("nil_ptr=<nil> nil_ptr=null"))
+		Expect(buf.String()).To(ContainSubstring("src=bar.go:99"))
+		Expect(buf.String()).To(ContainSubstring("obj={X:42}"))
+	})
+
+	It("covers ColorNode empty output, invalid spec, and commas", func() {
+		// Empty output inside %clr
+		hEmpty := logger.NewHandlerWithFormat(buf, nil, "prefix%clr(%msg(%v)){cyan}suffix\n")
+		hEmpty.SetColor(true)
+		rEmpty := slog.Record{Message: ""}
+		Expect(hEmpty.Handle(context.Background(), rEmpty)).To(Succeed())
+		Expect(buf.String()).To(Equal("prefixsuffix\n"))
+
+		// Invalid color/mode spec
+		buf.Reset()
+		hInvalid := logger.NewHandlerWithFormat(buf, nil, "%clr(%msg(%v)){invalid_style_name}\n")
+		hInvalid.SetColor(true)
+		rMsg := slog.Record{Message: "hello"}
+		Expect(hInvalid.Handle(context.Background(), rMsg)).To(Succeed())
+		Expect(buf.String()).To(Equal("hello\n"))
+
+		// Spec with extra commas
+		buf.Reset()
+		hCommas := logger.NewHandlerWithFormat(buf, nil, "%clr(%msg(%v)){,bold,,cyan,}\n")
+		hCommas.SetColor(true)
+		Expect(hCommas.Handle(context.Background(), rMsg)).To(Succeed())
+		Expect(buf.String()).To(Equal("\033[1;36mhello\033[0m\n"))
+	})
+
+	It("covers lone percent signs and unmatched parentheses in pattern parser", func() {
+		hLone := logger.NewHandlerWithFormat(buf, nil, "100% pure %msg(%v)%\n")
+		r := slog.Record{Message: "gold"}
+		Expect(hLone.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("100% pure gold%\n"))
+
+		// Unmatched parenthesis
+		buf.Reset()
+		hUnmatched := logger.NewHandlerWithFormat(buf, nil, "%time(%v\n")
+		Expect(hUnmatched.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("%time(<nil>\n"))
+	})
+
+	It("covers isTerminal environment variables (NO_COLOR, TERM=dumb)", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "%clr(%level(%v)) %msg(%v)\n")
+
+		// NO_COLOR env var disables color
+		Expect(os.Setenv("NO_COLOR", "1")).To(Succeed())
+		h.EnableColor()
+		Expect(h.IsColor()).To(BeFalse())
+		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+
+		// TERM=dumb disables color
+		Expect(os.Setenv("TERM", "dumb")).To(Succeed())
+		oldColorTerm := os.Getenv("COLORTERM")
+		Expect(os.Unsetenv("COLORTERM")).To(Succeed())
+		h.EnableColor()
+		Expect(h.IsColor()).To(BeFalse())
+		Expect(os.Unsetenv("TERM")).To(Succeed())
+		if oldColorTerm != "" {
+			Expect(os.Setenv("COLORTERM", oldColorTerm)).To(Succeed())
+		}
+
+		// When output is os.Stderr (which implements Fd)
+		hStderr := logger.NewHandlerWithFormat(os.Stderr, nil, "%msg(%v)")
+		hStderr.EnableColor()
+		_ = hStderr.IsColor()
+	})
+
+	It("covers additional AST traversal and formatting branches", func() {
+		// Clone with format on Logger
+		lg := logger.GetLogger().Clone()
+		defer lg.Reset()
+		lg.SetFormat("%time(%v) %msg(%v)")
+		clonedWithFormat := lg.Clone()
+		Expect(clonedWithFormat.GetFormat()).To(Equal("%time(%v) %msg(%v)"))
+
+		// Nested %clr and AST node traversal in hasLevelNode and hasTimeFormat
+		hNested := logger.NewHandlerWithFormat(buf, nil, "%clr(%clr(%level(%v))) %time(%time(%\"RFC3339\"v)) %time(%clr(%\"RFC3339\"v)) %time(%attr(%\"RFC3339\"v)) %time(%grp(%\"RFC3339\"v))\n")
+		hNested.SetColor(true)
+		Expect(hNested.Handle(context.Background(), slog.Record{Time: testTime, Level: slog.LevelInfo})).To(Succeed())
+
+		// Source with PC that has no file (e.g. PC=1)
+		buf.Reset()
+		hSourceInvalidPC := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, "%source(%v)")
+		Expect(hSourceInvalidPC.Handle(context.Background(), slog.Record{PC: 1})).To(Succeed())
+		Expect(buf.String()).To(Equal("\n"))
+
+		// Attribute with KindTime without custom layout (both %v and %qv)
+		buf.Reset()
+		hTimeAttr := logger.NewHandlerWithFormat(buf, nil, "%attr( %k=%v %k=%qv)\n")
+		rTimeAttr := slog.Record{Message: "time_test"}
+		rTimeAttr.Add(slog.Time("raw_time", testTime))
+		Expect(hTimeAttr.Handle(context.Background(), rTimeAttr)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("raw_time=" + testTime.String()))
+
+		// Panic recovery in appendFormattedValue
+		buf.Reset()
+		rPanic := slog.Record{Message: "panic_test"}
+		rPanic.Add(slog.Any("panicker", &PanicTextMarshaler{}))
+		Expect(hTimeAttr.Handle(context.Background(), rPanic)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("!PANIC"))
+
+		// SourceKey with string value and %qv
+		buf.Reset()
+		optsSourceStr := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.String(slog.SourceKey, "my/custom/file.go:123")
+				}
+				return a
+			},
+		}
+		hSourceStr := logger.NewHandlerWithFormat(buf, optsSourceStr, "%source(%qv)\n")
+		pc := make([]uintptr, 1)
+		runtime.Callers(1, pc)
+		Expect(hSourceStr.Handle(context.Background(), slog.Record{PC: pc[0]})).To(Succeed())
+		Expect(buf.String()).To(Equal("\"my/custom/file.go:123\"\n"))
 	})
 })
