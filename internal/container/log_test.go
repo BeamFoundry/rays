@@ -3,6 +3,8 @@ package container_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"strings"
 	_ "unsafe"
 
 	"github.com/BeamFoundry/rays/internal/container"
@@ -184,22 +186,61 @@ var _ = Describe("LoggingProperties", func() {
 	})
 
 	It("can set color to AUTO", func() {
+		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
+		origTerm, hasTerm := os.LookupEnv("TERM")
+		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
+		origArgs := os.Args
+		//nolint:errcheck // restoring environment in test cleanup
+		defer func() {
+			if hasNoColor {
+				os.Setenv("NO_COLOR", origNoColor)
+			} else {
+				os.Unsetenv("NO_COLOR")
+			}
+			if hasTerm {
+				os.Setenv("TERM", origTerm)
+			} else {
+				os.Unsetenv("TERM")
+			}
+			if hasColorTerm {
+				os.Setenv("COLORTERM", origColorTerm)
+			} else {
+				os.Unsetenv("COLORTERM")
+			}
+			os.Args = origArgs
+			GetLogger().SetOutput(GinkgoWriter)
+		}()
+
+		var filteredArgs []string
+		for _, arg := range os.Args {
+			trimmed := strings.TrimLeft(arg, "-")
+			if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
+				!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
+				filteredArgs = append(filteredArgs, arg)
+			}
+		}
+		os.Args = filteredArgs
+
+		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
+		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+
+		termWriter := &fakeTerminalWriter{Buffer: &bytes.Buffer{}}
+		GetLogger().SetOutput(termWriter)
+
 		Expect(GetContainer().LoadConfigAt(map[string]any{"color": "AUTO"}, "rays.logging")).NotTo(HaveOccurred())
 		err := GetContainer().Initialize()
 		Expect(err).NotTo(HaveOccurred())
-		// In tests under Ginkgo, output is GinkgoWriter, which supports colors in terminal
 		Expect(GetLogger().IsColor()).To(BeTrue())
 
 		// On non-terminal writer (like bytes.Buffer), AUTO detects false
 		buf := &bytes.Buffer{}
 		GetLogger().SetOutput(buf)
-		GetLogger().EnableColor()
 		Expect(GetLogger().IsColor()).To(BeFalse())
 
 		// Forcing SetColor(true) forces color even on non-terminal
 		GetLogger().SetColor(true)
 		Expect(GetLogger().IsColor()).To(BeTrue())
-		GetLogger().SetOutput(GinkgoWriter)
 	})
 
 	It("tests LoggingProperties.Color and default LogHandler", func() {
@@ -211,3 +252,9 @@ var _ = Describe("LoggingProperties", func() {
 		Expect(unknownHandler.Handler()).To(BeNil())
 	})
 })
+
+type fakeTerminalWriter struct {
+	*bytes.Buffer
+}
+
+func (f *fakeTerminalWriter) IsTerminal() bool { return true }

@@ -721,13 +721,30 @@ func matchKeyPrefix(s string) (key string, prefixLen int, ok bool) {
 	return "", 0, false
 }
 
+func isQuotedLayoutStart(s string, quoteIdx int) bool {
+	if quoteIdx == 0 || s[quoteIdx] != '"' {
+		return false
+	}
+	j := quoteIdx - 1
+	for j >= 0 && (s[j] >= '0' && s[j] <= '9' || s[j] == '-' || s[j] == '.') {
+		j--
+	}
+	if j >= 0 && s[j] == '%' {
+		pctCount := 0
+		for k := j; k >= 0 && s[k] == '%'; k-- {
+			pctCount++
+		}
+		return pctCount%2 == 1
+	}
+	return false
+}
+
 func findMatchingParen(s string, openParenIdx int) (int, bool) {
 	if openParenIdx >= len(s) || s[openParenIdx] != '(' {
 		return -1, false
 	}
 	depth := 1
 	inQuote := false
-	var quoteChar byte
 	for i := openParenIdx + 1; i < len(s); i++ {
 		c := s[i]
 		if inQuote {
@@ -735,15 +752,16 @@ func findMatchingParen(s string, openParenIdx int) (int, bool) {
 				i++
 				continue
 			}
-			if c == quoteChar {
+			if c == '"' {
 				inQuote = false
 			}
 			continue
 		}
-		switch c {
-		case '"', '\'':
+		if c == '"' && isQuotedLayoutStart(s, i) {
 			inQuote = true
-			quoteChar = c
+			continue
+		}
+		switch c {
 		case '(':
 			depth++
 		case ')':

@@ -6,8 +6,13 @@ import "golang.org/x/sys/windows"
 
 func checkTerminalVT(fd int) bool {
 	var mode uint32
-	if err := windows.GetConsoleMode(windows.Handle(fd), &mode); err != nil {
+	h := windows.Handle(fd)
+	if err := windows.GetConsoleMode(h, &mode); err != nil {
 		return false
 	}
-	return mode&windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0
+	if mode&windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 {
+		return true
+	}
+	mode |= windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING
+	return windows.SetConsoleMode(h, mode) == nil
 }
