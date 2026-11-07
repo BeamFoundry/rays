@@ -135,25 +135,31 @@ Rays features a compiled pattern layout engine. The format pattern string is par
 
 | Placeholder | Description | Inner Value Targets |
 | :--- | :--- | :--- |
-| `%time(...)` | Renders the log record timestamp | `%v`, `%qv`, or custom layout `%"<layout>"v` |
-| `%level(...)` | Renders the record log level | `%v`, `%-5v`, `%k=%v`, `%qv` |
-| `%source(...)` | Renders the reduced source file and line (only if `source: true`) | `%v`, `%qv`, `%k=%v` |
-| `%msg(...)` | Renders the log message | `%v`, `%qv`, `%k=%qv` |
-| `%attr(...)` | Iterates over top-level structured attributes | `%k`, `%qk`, `%v`, `%qv` |
-| `%grp(...)` | Iterates over attribute groups | `%g`, `%qg`, nested `%attr(...)` |
-| `%nl(...)` | Renders its contents only if the current item is **not the last** | Static delimiter, e.g. `%nl(,)` or `%nl( )` |
+| `%time(...)` | Renders the log record timestamp | Generic placeholders `%v`, `%qv`, or custom layout `%"<layout>"v` |
+| `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv` |
+| `%source(...)` | Renders the reduced source file and line (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%k=%v` |
+| `%msg(...)` | Renders the log message | Generic placeholders `%v`, `%qv`, `%k=%qv` |
+| `%attr(...)` | Iterates over top-level structured attributes | Generic placeholders `%k`, `%qk`, `%v`, `%qv` and delimiter `%nl(...)` |
+| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, nested `%attr(...)` |
+| `%nl(...)` | Renders its contents only if the current item is **not the last** | Static delimiter (e.g. `%nl(,)` or `%nl( )`), used inside `%attr(...)` |
 | `%clr(...)` | Wraps inner content in ANSI color and mode escape sequences | See [ANSI Styling](#ansi-styling) below |
 
-### Inner Target Specifiers
+### Generic Placeholders & Specifiers
 
-Inside placeholders like `%attr(...)` and `%grp(...)`, the following specifiers denote key, value, and group tokens:
+- **Generic Placeholders (`%k`, `%qk`, `%v`, `%qv`)**:
+  These are generic placeholders that apply across all placeholders:
+  - In `%time(...)`: `%k` represents `"time"`, and `%v` represents the formatted timestamp value.
+  - In `%level(...)`: `%k` represents `"level"`, and `%v` represents the level name (e.g. `INFO`).
+  - In `%source(...)`: `%k` represents `"source"`, and `%v` represents the source file and line.
+  - In `%msg(...)`: `%k` represents `"msg"`, and `%v` represents the log message.
+  - In `%attr(...)`: `%k` represents the attribute key, and `%v` represents the attribute value.
+  - `%qk` and `%qv` are the quoted counterparts of `%k` and `%v` (e.g. `"key"` and `"value"`), useful for JSON or escaped outputs.
 
-- `%k`: Attribute key (raw string)
-- `%qk`: Attribute key (quoted string, e.g. `"key"`)
-- `%v`: Attribute or placeholder value (raw string)
-- `%qv`: Attribute or placeholder value (quoted string, e.g. `"value"`)
-- `%g`: Group name (raw string)
-- `%qg`: Group name (quoted string, e.g. `"group"`)
+- **Attribute Delimiter (`%nl`)**:
+  `%nl(...)` applies **only inside `%attr(...)`**. It outputs its enclosed content only if the current attribute is **not the last** item in the iteration, making it ideal for delimiters (such as `%nl(,)` or `%nl( )`).
+
+- **Group Specifiers (`%g`, `%qg`)**:
+  `%g` (raw string) and `%qg` (quoted string) apply **only inside `%grp(...)`** to render the group name. Attributes within the group are iterated using a nested `%attr(...)`.
 
 ### Padding and Truncation Modifiers
 
@@ -176,7 +182,11 @@ The `%time(...)` placeholder supports custom formatting layouts specified in dou
 %time(%"<layout>"qv)
 ```
 
+When no custom layout is specified (such as `%time(%v)`), the default timestamp format used by Rays is `"2006/01/02 15:04:05.000"`.
+
 ### Predefined Epoch & Timestamp Layouts
+
+Rays adds dedicated Unix epoch time layouts for high-precision and Unix-compatible timestamps:
 
 | Layout Name | Description | Output Example |
 | :--- | :--- | :--- |
@@ -184,18 +194,12 @@ The `%time(...)` placeholder supports custom formatting layouts specified in dou
 | `"UnixMilli"` | Epoch time with millisecond decimal precision (seconds.milliseconds) | `1700000000.123` |
 | `"UnixMicro"` | Epoch time with microsecond decimal precision (seconds.microseconds) | `1700000000.123456` |
 | `"UnixNano"` | Epoch time with nanosecond decimal precision (seconds.nanoseconds) | `1700000000.123456789` |
-| `"RFC3339"` | Standard ISO-8601 / RFC 3339 format | `2026-11-05T12:00:00Z` |
-| `"RFC3339Nano"` | RFC 3339 with nanoseconds | `2026-11-05T12:00:00.123456789Z` |
-| `"DateTime"` | Standard date and time (`"2006-01-02 15:04:05"`) | `2026-11-05 12:00:00` |
-| `"DateOnly"` | Date only (`"2006-01-02"`) | `2026-11-05` |
-| `"TimeOnly"` | Time only (`"15:04:05"`) | `12:00:00` |
-| `"ANSIC"` | ANSI C `asctime()` layout | `Thu Nov  5 12:00:00 2026` |
-| `"Kitchen"` | 12-hour kitchen time format | `12:00PM` |
-| `"StampMilli"` | Month, day, and time with milliseconds | `Nov  5 12:00:00.000` |
+
+In addition to the Unix layouts above, all standard Go time format constants (such as `RFC3339`, `RFC3339Nano`, `DateTime`, `DateOnly`, `TimeOnly`, `ANSIC`, `UnixDate`, `RubyDate`, `RFC822`, `RFC822Z`, `RFC850`, `RFC1123`, `RFC1123Z`, `Kitchen`, `Stamp`, `StampMilli`, `StampMicro`, `StampNano`) are supported by name. Refer to the [Go time package constants table](https://pkg.go.dev/time#pkg-constants) for the complete list of standard format names.
 
 ### Custom Go Time Layouts
 
-Any standard Go reference time string (`2006-01-02 15:04:05`) can be passed directly as the layout:
+Any standard Go reference time layout (`2006-01-02 15:04:05`) can be passed directly as the layout:
 
 ```yaml
 rays:
@@ -203,8 +207,6 @@ rays:
     handler: CUSTOM
     format: '[%time(%"2006/01/02 - 15:04:05.000"v)] %level(%-5v) %msg(%v)'
 ```
-
-When no custom layout is provided (`%time(%v)`), the handler's configured `ReplaceAttr` function or default timestamp format is used.
 
 ---
 

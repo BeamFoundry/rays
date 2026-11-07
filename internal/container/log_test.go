@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "unsafe"
 
+	"github.com/BeamFoundry/rays/internal/container"
 	"github.com/BeamFoundry/rays/internal/logger"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/testing"
@@ -199,5 +200,14 @@ var _ = Describe("LoggingProperties", func() {
 		GetLogger().SetColor(true)
 		Expect(GetLogger().IsColor()).To(BeTrue())
 		GetLogger().SetOutput(GinkgoWriter)
+	})
+
+	It("tests LoggingProperties.Color and default LogHandler", func() {
+		Expect(GetContainer().Initialize()).To(Succeed())
+		props := GetBeamDefaultInstance[*container.LoggingProperties]()
+		Expect(props.Color()).To(Equal(props.LogColor()))
+
+		var unknownHandler container.LogHandler
+		Expect(unknownHandler.Handler()).To(BeNil())
 	})
 })
