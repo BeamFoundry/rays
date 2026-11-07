@@ -20,12 +20,13 @@ var defaultHandlerfunc = func(output io.Writer, options *slog.HandlerOptions) sl
 type Handler struct {
 	opts    slog.HandlerOptions
 	w       io.Writer
+	mu      *sync.Mutex
 	pattern *compiledPattern
 	color   *bool
 	format  string
 	groups  []string
 	attrs   []collectedAttr
-	mu      sync.Mutex
+	cfgMu   sync.RWMutex
 }
 
 // NewHandler creates a new Handler writing to w with DefaultFormat and the given options.
@@ -42,6 +43,7 @@ func NewHandlerWithFormat(w io.Writer, opts *slog.HandlerOptions, format string)
 	h := &Handler{
 		w:      w,
 		format: format,
+		mu:     &sync.Mutex{},
 	}
 	if opts != nil {
 		h.opts = *opts
@@ -56,28 +58,40 @@ func (this *Handler) SetFormat(format string) {
 	if format == "" {
 		format = DefaultFormat
 	}
+	pat := compilePattern(format)
+	this.cfgMu.Lock()
+	defer this.cfgMu.Unlock()
 	this.format = format
-	this.pattern = compilePattern(format)
+	this.pattern = pat
 }
 
 // GetFormat returns the currently configured pattern format string.
 func (this *Handler) GetFormat() string {
+	this.cfgMu.RLock()
+	defer this.cfgMu.RUnlock()
 	return this.format
 }
 
 // SetColor explicitly enables or disables ANSI color output.
 func (this *Handler) SetColor(enabled bool) {
+	this.cfgMu.Lock()
+	defer this.cfgMu.Unlock()
 	this.color = &enabled
 }
 
 // EnableColor automatically enables ANSI colors if the output writer is a terminal.
 func (this *Handler) EnableColor() {
-	this.SetColor(isTerminal(this.w))
+	enabled := isTerminal(this.w)
+	this.cfgMu.Lock()
+	defer this.cfgMu.Unlock()
+	this.color = &enabled
 }
 
 // IsColor reports whether ANSI color output is currently enabled.
 // If not explicitly set via SetColor, it detects whether the output writer is a terminal.
 func (this *Handler) IsColor() bool {
+	this.cfgMu.RLock()
+	defer this.cfgMu.RUnlock()
 	if this.color != nil {
 		return *this.color
 	}
@@ -85,6 +99,8 @@ func (this *Handler) IsColor() bool {
 }
 
 func (this *Handler) clone() *Handler {
+	this.cfgMu.RLock()
+	defer this.cfgMu.RUnlock()
 	return &Handler{
 		w:       this.w,
 		opts:    this.opts,
@@ -93,6 +109,7 @@ func (this *Handler) clone() *Handler {
 		color:   this.color,
 		attrs:   slices.Clone(this.attrs),
 		groups:  slices.Clone(this.groups),
+		mu:      this.mu,
 	}
 }
 
@@ -125,23 +142,39 @@ func (this *Handler) Handle(_ context.Context, r slog.Record) error {
 	allAttrs = append(allAttrs, this.attrs...)
 
 	rep := this.ReplaceAttr()
-	groupPrefix := strings.Join(this.groups, ".")
 	r.Attrs(func(attr slog.Attr) bool {
-		collectAttrRecursive(&allAttrs, attr, groupPrefix, this.groups, rep)
+		collectAttrRecursive(&allAttrs, attr, this.groups, rep)
 		return true
 	})
+
+	this.cfgMu.RLock()
+	pattern := this.pattern
+	format := this.format
+	isColor := false
+	if this.color != nil {
+		isColor = *this.color
+	} else {
+		isColor = isTerminal(this.w)
+	}
+	this.cfgMu.RUnlock()
+
+	isJson := strings.HasPrefix(strings.TrimSpace(format), "{")
+	isGELF := strings.Contains(format, `"version":"1.1"`)
 
 	ctx := renderContext{
 		record:       r,
 		rep:          rep,
 		addSource:    this.opts.AddSource,
-		isColor:      this.IsColor(),
-		hasGrpInTree: this.pattern.hasGrpInTree,
+		isColor:      isColor,
+		hasGrpInTree: pattern.hasGrpInTree,
+		isJson:       isJson,
+		isGELF:       isGELF,
+		format:       format,
 	}
 
-	if this.pattern.hasGrpInTree {
+	if pattern.hasGrpInTree {
 		for _, a := range allAttrs {
-			if a.group == "" {
+			if len(a.groups) == 0 {
 				ctx.topAttrs = append(ctx.topAttrs, a)
 			}
 		}
@@ -149,22 +182,19 @@ func (this *Handler) Handle(_ context.Context, r slog.Record) error {
 		ctx.topAttrs = allAttrs
 	}
 
-	groupMap := make(map[string]int)
-	for _, a := range allAttrs {
-		if a.group != "" {
-			if idx, found := groupMap[a.group]; found {
-				ctx.groups[idx].attrs = append(ctx.groups[idx].attrs, a.attr)
-			} else {
-				groupMap[a.group] = len(ctx.groups)
-				ctx.groups = append(ctx.groups, groupInfo{
-					name:  a.group,
-					attrs: []slog.Attr{a.attr},
-				})
-			}
-		}
+	mode := groupModeText
+	if isGELF {
+		mode = groupModeGELF
+	} else if isJson {
+		mode = groupModeJSON
 	}
+	ctx.groups = buildGroupInfos(allAttrs, mode)
 
-	this.pattern.root.Render(&ctx, buf)
+	pattern.root.Render(&ctx, buf)
+
+	if isJson {
+		cleanJsonCommas(buf)
+	}
 
 	if buf.Len() == 0 || (*buf)[buf.Len()-1] != '\n' {
 		buf.WriteByte('\n')
@@ -184,10 +214,9 @@ func (this *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		return this
 	}
 	h2 := this.clone()
-	rep := this.ReplaceAttr()
-	groupPrefix := strings.Join(this.groups, ".")
+	rep := h2.ReplaceAttr()
 	for _, attr := range attrs {
-		collectAttrRecursive(&h2.attrs, attr, groupPrefix, this.groups, rep)
+		collectAttrRecursive(&h2.attrs, attr, h2.groups, rep)
 	}
 	return h2
 }
@@ -202,39 +231,204 @@ func (this *Handler) WithGroup(name string) slog.Handler {
 	return h2
 }
 
-func collectAttrRecursive(all *[]collectedAttr, attr slog.Attr, groupPrefix string, groups []string, rep func([]string, slog.Attr) slog.Attr) {
+func collectAttrRecursive(all *[]collectedAttr, attr slog.Attr, groups []string, rep func([]string, slog.Attr) slog.Attr) {
 	attr.Value = attr.Value.Resolve()
 	if rep != nil && attr.Value.Kind() != slog.KindGroup {
 		attr = rep(groups, attr)
 		attr.Value = attr.Value.Resolve()
 	}
 
-	if attr.Equal(slog.Attr{}) || attr.Key == "" {
+	if attr.Equal(slog.Attr{}) {
 		return
 	}
 
 	if attr.Value.Kind() == slog.KindGroup {
-		newPrefix := attr.Key
-		if groupPrefix != "" {
-			newPrefix = groupPrefix + "." + attr.Key
+		if attr.Key == "" {
+			for _, ga := range attr.Value.Group() {
+				collectAttrRecursive(all, ga, groups, rep)
+			}
+			return
 		}
 		newGroups := append(slices.Clone(groups), attr.Key)
 		for _, ga := range attr.Value.Group() {
-			collectAttrRecursive(all, ga, newPrefix, newGroups, rep)
+			collectAttrRecursive(all, ga, newGroups, rep)
 		}
 		return
 	}
 
 	*all = append(*all, collectedAttr{
-		attr:  attr,
-		group: groupPrefix,
+		attr:   attr,
+		groups: slices.Clone(groups),
 	})
+}
+
+type groupFormatMode int
+
+const (
+	groupModeText groupFormatMode = iota
+	groupModeJSON
+	groupModeGELF
+)
+
+func buildGroupInfos(allAttrs []collectedAttr, mode groupFormatMode) []groupInfo {
+	if mode == groupModeGELF {
+		groupMap := make(map[string]int)
+		var groups []groupInfo
+		for _, a := range allAttrs {
+			if len(a.groups) > 0 {
+				key := strings.Join(a.groups, "_")
+				if idx, found := groupMap[key]; found {
+					groups[idx].attrs = append(groups[idx].attrs, a.attr)
+				} else {
+					groupMap[key] = len(groups)
+					groups = append(groups, groupInfo{
+						name:  key,
+						attrs: []slog.Attr{a.attr},
+					})
+				}
+			}
+		}
+		return groups
+	}
+	if mode == groupModeJSON {
+		return buildNestedGroupTree(allAttrs)
+	}
+	groupMap := make(map[string]int)
+	var groups []groupInfo
+	for _, a := range allAttrs {
+		if len(a.groups) > 0 {
+			key := strings.Join(a.groups, ".")
+			if idx, found := groupMap[key]; found {
+				groups[idx].attrs = append(groups[idx].attrs, a.attr)
+			} else {
+				groupMap[key] = len(groups)
+				groups = append(groups, groupInfo{
+					name:  key,
+					attrs: []slog.Attr{a.attr},
+				})
+			}
+		}
+	}
+	return groups
+}
+
+func buildNestedGroupTree(allAttrs []collectedAttr) []groupInfo {
+	type gNode struct {
+		name     string
+		attrs    []slog.Attr
+		children []*gNode
+	}
+	var roots []*gNode
+
+	findOrCreate := func(nodes *[]*gNode, name string) *gNode {
+		for _, n := range *nodes {
+			if n.name == name {
+				return n
+			}
+		}
+		n := &gNode{name: name}
+		*nodes = append(*nodes, n)
+		return n
+	}
+
+	for _, a := range allAttrs {
+		if len(a.groups) == 0 {
+			continue
+		}
+		currList := &roots
+		var currNode *gNode
+		for _, seg := range a.groups {
+			currNode = findOrCreate(currList, seg)
+			currList = &currNode.children
+		}
+		currNode.attrs = append(currNode.attrs, a.attr)
+	}
+
+	var convert func(n *gNode) groupInfo
+	convert = func(n *gNode) groupInfo {
+		gi := groupInfo{
+			name:  n.name,
+			attrs: n.attrs,
+		}
+		for _, ch := range n.children {
+			gi.children = append(gi.children, convert(ch))
+		}
+		return gi
+	}
+
+	var res []groupInfo
+	for _, r := range roots {
+		res = append(res, convert(r))
+	}
+	return res
+}
+
+func cleanJsonCommas(buf *Buffer) {
+	b := *buf
+	if len(b) < 2 || b[0] != '{' {
+		return
+	}
+	out := make([]byte, 0, len(b))
+	inString := false
+	var prevNonSpace byte
+
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if inString {
+			out = append(out, c)
+			if c == '\\' && i+1 < len(b) {
+				i++
+				out = append(out, b[i])
+				continue
+			}
+			if c == '"' {
+				inString = false
+				prevNonSpace = '"'
+			}
+			continue
+		}
+
+		if c == '"' {
+			inString = true
+			out = append(out, c)
+			prevNonSpace = '"'
+			continue
+		}
+
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			out = append(out, c)
+			continue
+		}
+
+		if c == ',' {
+			if prevNonSpace == '{' || prevNonSpace == '[' || prevNonSpace == ',' {
+				continue
+			}
+			j := i + 1
+			for j < len(b) && (b[j] == ' ' || b[j] == '\t' || b[j] == '\r' || b[j] == '\n') {
+				j++
+			}
+			if j < len(b) && (b[j] == '}' || b[j] == ']') {
+				continue
+			}
+			out = append(out, c)
+			prevNonSpace = ','
+			continue
+		}
+
+		out = append(out, c)
+		prevNonSpace = c
+	}
+
+	buf.Reset()
+	//nolint:errcheck // buffer write cannot fail
+	buf.Write(out)
 }
 
 //nolint:errcheck,revive //ignoring buffer write.
 func appendString(buf *Buffer, s string, quote bool) {
 	if quote {
-		buf.WriteString(strconv.Quote(s))
+		appendJsonString(buf, s)
 	} else {
 		buf.WriteString(s)
 	}

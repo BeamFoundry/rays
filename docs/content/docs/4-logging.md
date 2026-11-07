@@ -95,7 +95,7 @@ rays:
     # Default: AUTO
     color: AUTO
 
-    # Custom log format pattern (used when handler is CUSTOM or to override DEFAULT).
+    # Custom log format pattern (used only when handler is CUSTOM).
     # Default: DefaultFormat
     format: "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
 

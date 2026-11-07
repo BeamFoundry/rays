@@ -26,6 +26,7 @@ type Logger struct {
 	color       *bool
 	output      io.Writer
 	format      string
+	formatSet   bool
 }
 
 // New initializes and returns a new Logger writing to os.Stderr with default settings.
@@ -45,6 +46,7 @@ func (this *Logger) Clone() *Logger {
 		handlerFunc: this.handlerFunc,
 		options:     this.cloneOptions(),
 		format:      this.format,
+		formatSet:   this.formatSet,
 		color:       this.color,
 	}
 	handler := logger.handlerFunc(logger.output, logger.options)
@@ -54,7 +56,7 @@ func (this *Logger) Clone() *Logger {
 }
 
 func (this *Logger) applyHandlerSettings(handler slog.Handler) slog.Handler {
-	if this.format != "" {
+	if this.formatSet {
 		if h, ok := handler.(interface{ SetFormat(string) }); ok {
 			h.SetFormat(this.format)
 		}
@@ -64,8 +66,12 @@ func (this *Logger) applyHandlerSettings(handler slog.Handler) slog.Handler {
 			h.SetColor(*this.color)
 		}
 	} else {
-		if h, ok := handler.(interface{ EnableColor() }); ok {
+		switch h := handler.(type) {
+		case interface{ EnableColor() }:
 			h.EnableColor()
+		case interface{ SetColor(bool) }:
+			h.SetColor(isTerminal(this.output))
+		default:
 		}
 	}
 	return handler
@@ -131,6 +137,7 @@ func (this *Logger) SetOutput(output io.Writer) {
 // SetFormat configures the pattern layout format on the underlying handler if supported.
 func (this *Logger) SetFormat(format string) {
 	this.format = format
+	this.formatSet = true
 	if h, ok := this.Handler().(interface{ SetFormat(string) }); ok {
 		h.SetFormat(format)
 	}
@@ -175,9 +182,11 @@ func (this *Logger) IsColor() bool {
 	return isTerminal(this.output)
 }
 
-// Reset restores the logger to its default handler, format, color mode, and options.
+// Reset restores the logger to its default handler, format, and color mode
+// while preserving the logger's output and handler options, including the configured log level.
 func (this *Logger) Reset() {
 	this.format = ""
+	this.formatSet = false
 	this.color = nil
 	this.handlerFunc = defaultHandlerfunc
 	handlerOptions = defaultHandlerOptions()

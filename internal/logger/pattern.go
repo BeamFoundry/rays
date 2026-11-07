@@ -2,9 +2,11 @@ package logger
 
 import (
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -24,28 +27,56 @@ const (
 	// TextFormat is the standard slog logfmt-style text pattern.
 	TextFormat = "%time(%k=%v )%level(%k=%v) %source(%k=%v )%msg(%k=%qv)%attr( %k=%qv)%grp(%attr( %g.%k=%qv))"
 	// JSONFormat is the standard JSON log format.
-	JSONFormat = `{%time(%qk:%qv,)%level(%qk:%qv)%source(,%qk:%qv),%msg(%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	JSONFormat = `{%time(%qk:%qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
-	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// GELFFormat is the Graylog Extended Log Format (GELF) v1.1 JSON format.
-	GELFFormat = `{"version":"1.1","host":"localhost",%time("timestamp":%"UnixMilli"v,)%level("level":%qv),%msg("short_message":%qv)%source(,"_source":%qv)%attr(,"_%k":%qv)%grp(,"_%g":{%attr(%qk:%qv%nl(,))})}`
+	GELFFormat = `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%q_k:%qv)%grp(%attr(,%q_gk:%qv))}`
 	// LogstashFormat is the Logstash JSON event format.
-	LogstashFormat = `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	LogstashFormat = `{"@version":"1"%time(,"@timestamp":%"RFC3339"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	keyTime        = "time"
 	keyLevel       = "level"
 	keyMsg         = "msg"
 	keySource      = "source"
+	keyHost        = "host"
 	ansiReset      = "\033[0m"
 )
 
 type collectedAttr struct {
-	attr  slog.Attr
-	group string
+	attr   slog.Attr
+	groups []string
 }
 
 type groupInfo struct {
-	name  string
-	attrs []slog.Attr
+	name     string
+	attrs    []slog.Attr
+	children []groupInfo
+}
+
+var (
+	emitterIdentityMu sync.RWMutex
+	emitterIdentity   string
+)
+
+// SetEmitterIdentity sets the emitter identity (hostname) used in log formats like GELF.
+func SetEmitterIdentity(identity string) {
+	emitterIdentityMu.Lock()
+	defer emitterIdentityMu.Unlock()
+	emitterIdentity = identity
+}
+
+// GetEmitterIdentity returns the currently configured emitter identity, or the system hostname if unset.
+func GetEmitterIdentity() string {
+	emitterIdentityMu.RLock()
+	id := emitterIdentity
+	emitterIdentityMu.RUnlock()
+	if id != "" {
+		return id
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "localhost"
 }
 
 // PatternNode represents a node in the compiled log pattern AST.
@@ -219,15 +250,22 @@ func (n *KeyNode) Render(ctx *renderContext, buf *Buffer) {
 	}
 	var a slog.Attr
 	switch n.key {
+	case keyHost:
+		host := GetEmitterIdentity()
+		a = ctx.rep(nil, slog.String("host", host))
 	case keyTime:
 		if ctx.record.Time.IsZero() {
 			return
 		}
 		val := ctx.record.Time.Round(0)
+		repAttr := ctx.rep(nil, slog.Time(slog.TimeKey, val))
+		if repAttr.Equal(slog.Attr{}) || repAttr.Key == "" {
+			return
+		}
 		if hasTimeFormat(n.inner) {
 			a = slog.Time(slog.TimeKey, val)
 		} else {
-			a = ctx.rep(nil, slog.Time(slog.TimeKey, val))
+			a = repAttr
 		}
 	case keyLevel:
 		a = ctx.rep(nil, slog.Any(slog.LevelKey, ctx.record.Level))
@@ -274,8 +312,11 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 			attrCtx := *ctx
 			attrCtx.currentAttr = attr
 			attrCtx.isKey = false
-			attrCtx.isLast = (i == len(attrs)-1)
+			attrCtx.isLast = (i == len(attrs)-1) && len(ctx.groupChildren) == 0
 			n.inner.Render(&attrCtx, buf)
+		}
+		if ctx.isJson && len(ctx.groupChildren) > 0 {
+			renderChildGroupsJSON(buf, ctx.groupChildren, len(attrs) > 0)
 		}
 		return
 	}
@@ -284,10 +325,38 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 	for i, item := range attrs {
 		attrCtx := *ctx
 		attrCtx.currentAttr = item.attr
-		attrCtx.currentGroup = item.group
+		if len(item.groups) > 0 {
+			attrCtx.currentGroup = strings.Join(item.groups, ".")
+		} else {
+			attrCtx.currentGroup = ""
+		}
 		attrCtx.isKey = false
 		attrCtx.isLast = (i == len(attrs)-1)
 		n.inner.Render(&attrCtx, buf)
+	}
+}
+
+//nolint:errcheck,revive // buffer write cannot fail; helper for child group JSON rendering
+func renderChildGroupsJSON(buf *Buffer, children []groupInfo, hasPriorAttrs bool) {
+	for i, child := range children {
+		if hasPriorAttrs || i > 0 {
+			buf.WriteByte(',')
+		}
+		appendJsonString(buf, child.name)
+		buf.WriteByte(':')
+		buf.WriteByte('{')
+		for j, attr := range child.attrs {
+			if j > 0 {
+				buf.WriteByte(',')
+			}
+			appendJsonString(buf, attr.Key)
+			buf.WriteByte(':')
+			appendFormattedValue(buf, attr.Value, true)
+		}
+		if len(child.children) > 0 {
+			renderChildGroupsJSON(buf, child.children, len(child.attrs) > 0)
+		}
+		buf.WriteByte('}')
 	}
 }
 
@@ -303,6 +372,7 @@ func (n *GroupNode) Render(ctx *renderContext, buf *Buffer) {
 		grpCtx.inGroup = true
 		grpCtx.currentGroup = grp.name
 		grpCtx.groupAttrs = grp.attrs
+		grpCtx.groupChildren = grp.children
 		grpCtx.isLast = (i == len(groups)-1)
 		n.inner.Render(&grpCtx, buf)
 	}
@@ -323,6 +393,7 @@ func (n *NotLastNode) Render(ctx *renderContext, buf *Buffer) {
 // ValueFormatNode formats attribute keys, values, and groups with optional padding, truncation, quoting, or custom layouts.
 type ValueFormatNode struct {
 	target     string
+	prefix     string
 	timeFormat string
 	minWidth   int
 	maxWidth   int
@@ -335,9 +406,19 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	var s string
 	switch n.target {
 	case "k":
-		s = ctx.currentAttr.Key
+		if strings.ContainsAny(ctx.currentAttr.Key, " =\"") {
+			s = formatJsonString(ctx.currentAttr.Key)
+		} else {
+			s = ctx.currentAttr.Key
+		}
 	case "qk":
-		s = strconv.Quote(ctx.currentAttr.Key)
+		k := ctx.currentAttr.Key
+		if n.prefix != "" {
+			k = n.prefix + k
+		}
+		s = formatJsonString(k)
+	case "q_k":
+		s = formatJsonString("_" + ctx.currentAttr.Key)
 	case "v":
 		s = n.formatTimeOrValue(ctx, false)
 	case "qv":
@@ -346,8 +427,17 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 		s = ctx.currentGroup
 	case "qg":
 		if ctx.currentGroup != "" {
-			s = strconv.Quote(ctx.currentGroup)
+			s = formatJsonString(ctx.currentGroup)
 		}
+	case "q_gk", "q_g_k":
+		name := "_" + ctx.currentAttr.Key
+		if ctx.currentGroup != "" {
+			name = "_" + ctx.currentGroup + "_" + ctx.currentAttr.Key
+		}
+		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
+			name = n.prefix + name
+		}
+		s = formatJsonString(name)
 	default:
 	}
 	s = applyFormatModifier(s, n.minWidth, n.leftAlign, n.hasMax, n.maxWidth, n.truncEnd)
@@ -357,22 +447,86 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 
 //nolint:revive // quote flag differentiates between %v and %qv
 func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) string {
-	if n.timeFormat == "" {
-		return ctx.formatCurrentValue(quote)
+	if n.timeFormat != "" {
+		if strings.EqualFold(n.timeFormat, "syslog") && ctx.isKey && ctx.currentAttr.Key == slog.LevelKey {
+			lvl, ok := ctx.currentAttr.Value.Any().(slog.Level)
+			if !ok {
+				lvl = ctx.record.Level
+			}
+			return strconv.Itoa(syslogSeverity(lvl))
+		}
+		var formatted string
+		switch {
+		case ctx.isKey && ctx.currentAttr.Key == slog.TimeKey:
+			formatted = formatTime(ctx.record.Time, n.timeFormat)
+		case ctx.currentAttr.Value.Kind() == slog.KindTime:
+			formatted = formatTime(ctx.currentAttr.Value.Time(), n.timeFormat)
+		default:
+			formatted = ctx.formatCurrentValue(false)
+		}
+		if quote {
+			return formatJsonString(formatted)
+		}
+		return formatted
 	}
-	var formatted string
-	switch {
-	case ctx.isKey && ctx.currentAttr.Key == slog.TimeKey:
-		formatted = formatTime(ctx.record.Time, n.timeFormat)
-	case ctx.currentAttr.Value.Kind() == slog.KindTime:
-		formatted = formatTime(ctx.currentAttr.Value.Time(), n.timeFormat)
-	default:
-		formatted = ctx.formatCurrentValue(false)
-	}
-	if quote {
-		return strconv.Quote(formatted)
+	formatted := ctx.formatCurrentValue(quote)
+	if !quote && ctx.isKey && ctx.currentAttr.Key == slog.TimeKey {
+		if strings.Contains(formatted, " ") {
+			formatted = strconv.Quote(formatted)
+		}
 	}
 	return formatted
+}
+
+func formatUnixFractional(t time.Time, decimals int) string {
+	sec := t.Unix()
+	nsec := int64(t.Nanosecond())
+	if sec >= 0 {
+		var frac int64
+		switch decimals {
+		case 3:
+			frac = nsec / 1_000_000
+		case 6:
+			frac = nsec / 1_000
+		default:
+			frac = nsec
+		}
+		return fmt.Sprintf("%d.%0*d", sec, decimals, frac)
+	}
+
+	if nsec == 0 {
+		return fmt.Sprintf("%d.%0*d", sec, decimals, 0)
+	}
+
+	wholeSec := -sec - 1
+	remNsec := 1_000_000_000 - nsec
+	var frac int64
+	switch decimals {
+	case 3:
+		frac = remNsec / 1_000_000
+	case 6:
+		frac = remNsec / 1_000
+	default:
+		frac = remNsec
+	}
+	return fmt.Sprintf("-%d.%0*d", wholeSec, decimals, frac)
+}
+
+func syslogSeverity(level slog.Level) int {
+	switch {
+	case level >= LevelFatal:
+		return 2
+	case level >= slog.LevelError:
+		return 3
+	case level >= slog.LevelWarn:
+		return 4
+	case level >= slog.LevelInfo:
+		return 6
+	case level >= LevelTrace:
+		return 7
+	default:
+		return 7
+	}
 }
 
 func formatTime(t time.Time, layout string) string {
@@ -380,11 +534,11 @@ func formatTime(t time.Time, layout string) string {
 	case "unix":
 		return strconv.FormatInt(t.Unix(), 10)
 	case "unixmilli", "unix_milli":
-		return fmt.Sprintf("%d.%03d", t.Unix(), t.Nanosecond()/1_000_000)
+		return formatUnixFractional(t, 3)
 	case "unixmicro", "unix_micro":
-		return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1_000)
+		return formatUnixFractional(t, 6)
 	case "unixnano", "unix_nano":
-		return fmt.Sprintf("%d.%09d", t.Unix(), t.Nanosecond())
+		return formatUnixFractional(t, 9)
 	case "rfc3339", "iso8601", "iso_8601", "iso-8601":
 		return t.Format(time.RFC3339)
 	case "rfc3339nano", "rfc3339_nano":
@@ -498,7 +652,7 @@ func hasTimeFormat(node PatternNode) bool {
 	}
 }
 
-var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(qk|qv|qg|k|v|g)`)
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|qk|qv|qg|k|v|g)`)
 
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 	m := formatSpecRegex.FindStringSubmatch(s)
@@ -506,9 +660,14 @@ func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 		return nil, 0, false
 	}
 	matchedLen := len(m[0])
-	timeFormat := m[1]
-	if timeFormat == "" {
-		timeFormat = m[6]
+	prefix := m[1]
+	if prefix == "" {
+		prefix = m[6]
+	}
+	timeFormat := ""
+	target := m[7]
+	if target == "v" || target == "qv" {
+		timeFormat = prefix
 	}
 	leftAlign := m[2] == "-"
 	minWidth := 0
@@ -526,12 +685,9 @@ func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 			maxWidth = val
 		}
 	}
-	target := m[7]
-	if target != "v" && target != "qv" {
-		timeFormat = ""
-	}
 	return &ValueFormatNode{
 		target:     target,
+		prefix:     prefix,
 		timeFormat: timeFormat,
 		minWidth:   minWidth,
 		leftAlign:  leftAlign,
@@ -550,10 +706,12 @@ func matchKeyPrefix(s string) (key string, prefixLen int, ok bool) {
 		{"%level(", keyLevel},
 		{"%msg(", keyMsg},
 		{"%source(", keySource},
+		{"%host(", keyHost},
 		{"%t(", keyTime},
 		{"%l(", keyLevel},
 		{"%m(", keyMsg},
 		{"%s(", keySource},
+		{"%h(", keyHost},
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p.prefix) {
@@ -568,8 +726,24 @@ func findMatchingParen(s string, openParenIdx int) (int, bool) {
 		return -1, false
 	}
 	depth := 1
+	inQuote := false
+	var quoteChar byte
 	for i := openParenIdx + 1; i < len(s); i++ {
-		switch s[i] {
+		c := s[i]
+		if inQuote {
+			if c == '\\' && i+1 < len(s) {
+				i++
+				continue
+			}
+			if c == quoteChar {
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			inQuote = true
+			quoteChar = c
 		case '(':
 			depth++
 		case ')':
@@ -683,49 +857,60 @@ func parsePattern(format string) PatternNode {
 }
 
 type renderContext struct {
-	currentAttr  slog.Attr
-	rep          func(groups []string, a slog.Attr) slog.Attr
-	currentGroup string
-	record       slog.Record
-	groupAttrs   []slog.Attr
-	groups       []groupInfo
-	topAttrs     []collectedAttr
-	hasGrpInTree bool
-	addSource    bool
-	isColor      bool
-	isKey        bool
-	isLast       bool
-	inGroup      bool
+	currentAttr   slog.Attr
+	rep           func(groups []string, a slog.Attr) slog.Attr
+	currentGroup  string
+	format        string
+	record        slog.Record
+	groupChildren []groupInfo
+	topAttrs      []collectedAttr
+	groups        []groupInfo
+	groupAttrs    []slog.Attr
+	hasGrpInTree  bool
+	addSource     bool
+	isColor       bool
+	isKey         bool
+	isLast        bool
+	inGroup       bool
+	isJson        bool
+	isGELF        bool
 }
 
 //nolint:revive // quote flag is required to differentiate between %v and %qv
 func (ctx *renderContext) formatCurrentValue(quote bool) string {
+	if ctx.isGELF && ctx.currentAttr.Value.Kind() == slog.KindBool {
+		if ctx.currentAttr.Value.Bool() {
+			return "1"
+		}
+		return "0"
+	}
+
 	if ctx.isKey {
 		v := ctx.currentAttr.Value.Resolve()
 		switch ctx.currentAttr.Key {
 		case slog.TimeKey:
 			if v.Kind() == slog.KindString {
 				if quote {
-					return strconv.Quote(v.String())
+					return formatJsonString(v.String())
 				}
 				return v.String()
 			}
 			if v.Kind() == slog.KindTime {
 				formatted := v.Time().Format(time.RFC3339)
 				if quote {
-					return strconv.Quote(formatted)
+					return formatJsonString(formatted)
 				}
 				return formatted
 			}
 			s := v.String()
 			if quote {
-				return strconv.Quote(s)
+				return formatJsonString(s)
 			}
 			return s
 		case slog.LevelKey:
 			if v.Kind() == slog.KindString {
 				if quote {
-					return strconv.Quote(v.String())
+					return formatJsonString(v.String())
 				}
 				return v.String()
 			}
@@ -740,37 +925,40 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 					s = lvl.String()
 				}
 				if quote {
-					return strconv.Quote(s)
+					return formatJsonString(s)
 				}
 				return s
 			}
 			s := v.String()
 			if quote {
-				return strconv.Quote(s)
+				return formatJsonString(s)
 			}
 			return s
 		case slog.SourceKey:
 			if v.Kind() == slog.KindString {
 				if quote {
-					return strconv.Quote(v.String())
+					return formatJsonString(v.String())
 				}
 				return v.String()
 			}
 			if src, ok := v.Any().(*slog.Source); ok {
-				s := fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 				if quote {
-					return strconv.Quote(s)
+					return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
+						formatJsonString(filepath.Base(src.File)),
+						src.Line,
+						formatJsonString(src.Function),
+					)
 				}
-				return s
+				return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 			}
 			s := fmt.Sprintf("%+v", v.Any())
 			if quote {
-				return strconv.Quote(s)
+				return formatJsonString(s)
 			}
 			return s
 		case slog.MessageKey:
 			if quote {
-				return strconv.Quote(v.String())
+				return formatJsonString(v.String())
 			}
 			return v.String()
 		default:
@@ -802,6 +990,19 @@ func applyFormatModifier(s string, minWidth int, leftAlign, hasMax bool, maxWidt
 	return s
 }
 
+func formatJsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err == nil {
+		return string(b)
+	}
+	return strconv.Quote(s)
+}
+
+func appendJsonString(buf *Buffer, s string) {
+	//nolint:errcheck // buffer write cannot fail
+	buf.WriteString(formatJsonString(s))
+}
+
 func formatValue(v slog.Value, quote bool) string {
 	buf := NewBuffer()
 	defer buf.Free()
@@ -819,7 +1020,22 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 	case slog.KindUint64:
 		*buf = strconv.AppendUint(*buf, v.Uint64(), 10)
 	case slog.KindFloat64:
-		*buf = strconv.AppendFloat(*buf, v.Float64(), 'g', -1, 64)
+		f := v.Float64()
+		if quote {
+			if math.IsNaN(f) {
+				appendString(buf, "!FLOAT:NaN", true)
+				return
+			}
+			if math.IsInf(f, 1) {
+				appendString(buf, "!FLOAT:+Inf", true)
+				return
+			}
+			if math.IsInf(f, -1) {
+				appendString(buf, "!FLOAT:-Inf", true)
+				return
+			}
+		}
+		*buf = strconv.AppendFloat(*buf, f, 'g', -1, 64)
 	case slog.KindBool:
 		*buf = strconv.AppendBool(*buf, v.Bool())
 	case slog.KindDuration:
@@ -856,11 +1072,16 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 		case encoding.TextMarshaler:
 			data, err := cv.MarshalText()
 			if err != nil {
-				break
+				appendString(buf, fmt.Sprintf("!ERROR: %v", err), quote)
+				return
 			}
 			appendString(buf, string(data), quote)
 		case *slog.Source:
-			appendSource(buf, cv)
+			if quote {
+				appendString(buf, fmt.Sprintf("%s:%d", filepath.Join(filepath.Base(filepath.Dir(cv.File)), filepath.Base(cv.File)), cv.Line), true)
+			} else {
+				appendSource(buf, cv)
+			}
 		default:
 			val := reflect.ValueOf(cv)
 			if val.Kind() == reflect.Pointer && val.IsNil() {
@@ -871,6 +1092,24 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 					appendString(buf, "<nil>", false)
 				}
 				return
+			}
+			if quote {
+				if jm, ok := cv.(json.Marshaler); ok {
+					b, err := jm.MarshalJSON()
+					if err == nil {
+						//nolint:errcheck // buffer write cannot fail
+						buf.WriteString(string(b))
+						return
+					}
+				}
+				if val.Kind() == reflect.Map || val.Kind() == reflect.Slice || val.Kind() == reflect.Array || val.Kind() == reflect.Struct {
+					b, err := json.Marshal(cv)
+					if err == nil {
+						//nolint:errcheck // buffer write cannot fail
+						buf.WriteString(string(b))
+						return
+					}
+				}
 			}
 			appendString(buf, fmt.Sprintf("%+v", cv), quote)
 		}
@@ -897,6 +1136,7 @@ var colorCodes = map[string]int{
 	"magenta":        35,
 	"cyan":           36,
 	"white":          37,
+	"default":        39,
 	"bright_black":   90,
 	"bright_red":     91,
 	"bright_green":   92,
@@ -959,14 +1199,19 @@ func isTerminal(w io.Writer) bool {
 	if os.Getenv("TERM") == "dumb" && os.Getenv("COLORTERM") == "" {
 		return false
 	}
+	if t, ok := w.(interface{ IsTerminal() bool }); ok {
+		return t.IsTerminal()
+	}
+	if f, ok := w.(interface{ Fd() uintptr }); ok {
+		fd := int(f.Fd())
+		return term.IsTerminal(fd) && checkTerminalVT(fd)
+	}
 	if _, ok := w.(interface {
 		TeeTo(io.Writer)
 		ClearTeeWriters()
 	}); ok {
-		return true
-	}
-	if f, ok := w.(interface{ Fd() uintptr }); ok {
-		return term.IsTerminal(int(f.Fd()))
+		fd := int(os.Stdout.Fd())
+		return term.IsTerminal(fd) && checkTerminalVT(fd)
 	}
 	return false
 }

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -601,7 +604,7 @@ var _ = Describe("PatternHandler", func() {
 			Level:   slog.LevelWarn,
 			PC:      getFramePointer(),
 		}
-		r.Add("user_id", "u123", "retry", 3)
+		r.Add("user_id", "u123", "retry", 3, "flag", true)
 		r.Add(slog.Group("details", slog.String("env", "prod")))
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 
@@ -611,17 +614,16 @@ var _ = Describe("PatternHandler", func() {
 		var js map[string]any
 		Expect(json.Unmarshal([]byte(output), &js)).To(Succeed())
 		Expect(js["version"]).To(Equal("1.1"))
-		Expect(js["host"]).To(Equal("localhost"))
+		hostname := logger.GetEmitterIdentity()
+		Expect(js["host"]).To(Equal(hostname))
 		Expect(js["timestamp"]).To(BeNumerically("~", 1700000000.123, 0.0001))
-		Expect(js["level"]).To(Equal("WARN"))
+		Expect(js["level"]).To(BeEquivalentTo(4))
 		Expect(js["short_message"]).To(Equal("GELF message"))
 		Expect(js["_source"]).NotTo(BeNil())
 		Expect(js["_user_id"]).To(Equal("u123"))
 		Expect(js["_retry"]).To(BeEquivalentTo(3))
-
-		details, ok := js["_details"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		Expect(details["env"]).To(Equal("prod"))
+		Expect(js["_flag"]).To(BeEquivalentTo(1))
+		Expect(js["_details_env"]).To(Equal("prod"))
 	})
 
 	It("formats with LogstashFormat", func() {
@@ -938,11 +940,38 @@ var _ = Describe("PatternHandler", func() {
 		lg.SetColor(true)
 		Expect(lg.IsColor()).To(BeTrue())
 
-		// On Logger with GinkgoWriter (terminal)
+		// On Logger with terminal output, isolated from ambient environment
+		origNoColor := os.Getenv("NO_COLOR")
+		origTerm := os.Getenv("TERM")
+		origColorTerm := os.Getenv("COLORTERM")
+		//nolint:errcheck // restoring environment in test cleanup
+		defer func() {
+			os.Setenv("NO_COLOR", origNoColor)
+			os.Setenv("TERM", origTerm)
+			os.Setenv("COLORTERM", origColorTerm)
+		}()
+
+		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
+		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+
+		termOut := &fakeTerminalWriter{Buffer: bytes.NewBuffer(nil)}
 		lg.Reset()
-		lg.SetOutput(GinkgoWriter)
+		lg.SetOutput(termOut)
 		lg.EnableColor()
 		Expect(lg.IsColor()).To(BeTrue())
+
+		// Disabled with NO_COLOR=1
+		Expect(os.Setenv("NO_COLOR", "1")).To(Succeed())
+		lg.EnableColor()
+		Expect(lg.IsColor()).To(BeFalse())
+
+		// Disabled with TERM=dumb
+		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+		Expect(os.Setenv("TERM", "dumb")).To(Succeed())
+		Expect(os.Unsetenv("COLORTERM")).To(Succeed())
+		lg.EnableColor()
+		Expect(lg.IsColor()).To(BeFalse())
 	})
 })
 
@@ -966,6 +995,12 @@ var _ = Describe("ReduceFunctionName", func() {
 		}
 	})
 })
+
+type fakeTerminalWriter struct {
+	*bytes.Buffer
+}
+
+func (f *fakeTerminalWriter) IsTerminal() bool { return true }
 
 type dummySetColorOnlyHandler struct {
 	color bool
@@ -1005,8 +1040,23 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		lg.SetColor(true)
 		Expect(lg.IsColor()).To(BeTrue())
 
+		termBuf := &fakeTerminalWriter{Buffer: bytes.NewBuffer(nil)}
+		lg.SetOutput(termBuf)
+		origNoColor := os.Getenv("NO_COLOR")
+		origTerm := os.Getenv("TERM")
+		origColorTerm := os.Getenv("COLORTERM")
+		//nolint:errcheck // restoring environment in test cleanup
+		defer func() {
+			os.Setenv("NO_COLOR", origNoColor)
+			os.Setenv("TERM", origTerm)
+			os.Setenv("COLORTERM", origColorTerm)
+		}()
+		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
+		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+
 		lg.EnableColor()
-		Expect(lg.IsColor()).To(BeTrue()) // output is GinkgoWriter (terminal)
+		Expect(lg.IsColor()).To(BeTrue())
 
 		// Handler that only implements SetColor(bool) without EnableColor()
 		dummy := &dummySetColorOnlyHandler{}
@@ -1261,4 +1311,374 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(hSourceStr.Handle(context.Background(), slog.Record{PC: pc[0]})).To(Succeed())
 		Expect(buf.String()).To(Equal("\"my/custom/file.go:123\"\n"))
 	})
+
+	It("supports default color code 39 in custom pattern rendering", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "%clr(%msg(%v)){default}\n")
+		h.SetColor(true)
+		r := slog.Record{Message: "default color test"}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("\033[39mdefault color test\033[0m\n"))
+	})
+
+	It("shares writer mutex across cloned handlers for serialized writes", func() {
+		base := logger.NewHandler(buf, nil)
+		clone1 := base.WithAttrs([]slog.Attr{slog.String("c", "1")})
+		clone2 := base.WithGroup("grp")
+
+		var wg sync.WaitGroup
+		for i := 0; i < 20; i++ {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				Expect(clone1.Handle(context.Background(), slog.Record{Message: "msg1"})).To(Succeed())
+			}()
+			go func() {
+				defer wg.Done()
+				Expect(clone2.Handle(context.Background(), slog.Record{Message: "msg2"})).To(Succeed())
+			}()
+		}
+		wg.Wait()
+		Expect(buf.Len()).To(BeNumerically(">", 0))
+	})
+
+	It("synchronizes SetFormat, SetColor, and Handle concurrently without race", func() {
+		h := logger.NewHandler(buf, nil)
+		var wg sync.WaitGroup
+		for i := 0; i < 20; i++ {
+			wg.Add(3)
+			go func() {
+				defer wg.Done()
+				h.SetFormat("%time(%v) %msg(%v)")
+			}()
+			go func() {
+				defer wg.Done()
+				h.SetColor(true)
+			}()
+			go func() {
+				defer wg.Done()
+				Expect(h.Handle(context.Background(), slog.Record{Message: "concurrent"})).To(Succeed())
+			}()
+		}
+		wg.Wait()
+	})
+
+	It("retains anonymous group members and empty-key non-group attributes in collectAttrRecursive", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		h.SetColor(false)
+		r := slog.Record{Message: "test"}
+		// Anonymous group with request_id
+		r.Add(slog.Group("", slog.String("request_id", "req-456")))
+		// Non-group attribute with empty key
+		r.Add(slog.String("", "empty_key_val"))
+		// Zero attribute (should be skipped)
+		r.Add(slog.Attr{})
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["request_id"]).To(Equal("req-456"))
+		Expect(js[""]).To(Equal("empty_key_val"))
+	})
+
+	It("preserves group ancestry as separate path segments and keeps literal group keys distinct", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		h.SetColor(false)
+		r := slog.Record{Message: "test"}
+		// Nested groups: request -> user
+		r.Add(slog.Group("request", slog.Group("user", slog.String("name", "alice"))))
+		// Literal group key with dot
+		r.Add(slog.Group("request.user", slog.String("role", "admin")))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+
+		// Nested object built from segments
+		req, ok := js["request"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		user, ok := req["user"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(user["name"]).To(Equal("alice"))
+
+		// Literal group key distinct and not merged
+		lit, ok := js["request.user"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(lit["role"]).To(Equal("admin"))
+	})
+
+	It("emits valid JSON without doubled or trailing commas when level and message are omitted in all built-in JSON formats", func() {
+		omitOpts := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.LevelKey || a.Key == slog.MessageKey {
+					return slog.Attr{} // omit level and message
+				}
+				return a
+			},
+		}
+
+		formats := []string{
+			logger.JSONFormat,
+			logger.ECSFormat,
+			logger.GELFFormat,
+			logger.LogstashFormat,
+		}
+
+		for _, fmtStr := range formats {
+			buf.Reset()
+			h := logger.NewHandlerWithFormat(buf, omitOpts, fmtStr)
+			h.SetColor(false)
+			r := slog.Record{
+				Time:    testTime,
+				Message: "Omitted",
+				Level:   slog.LevelInfo,
+			}
+			r.Add("app", "test", "num", 100)
+			Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+			out := buf.String()
+			Expect(out).NotTo(ContainSubstring(",,"))
+			Expect(out).NotTo(ContainSubstring("{,"))
+			Expect(out).NotTo(ContainSubstring(",}"))
+
+			var js map[string]any
+			Expect(json.Unmarshal([]byte(out), &js)).To(Succeed())
+			Expect(js["level"]).To(BeNil())
+			Expect(js["log.level"]).To(BeNil())
+			Expect(js["message"]).To(BeNil())
+			Expect(js["short_message"]).To(BeNil())
+			if fmtStr == logger.GELFFormat {
+				Expect(js["_app"]).To(Equal("test"))
+			} else {
+				Expect(js["app"]).To(Equal("test"))
+			}
+		}
+	})
+
+	It("emits structured source fields in ECSFormat", func() {
+		h := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, logger.ECSFormat)
+		h.SetColor(false)
+		pc := make([]uintptr, 1)
+		runtime.Callers(1, pc)
+		r := slog.Record{
+			Time:    testTime,
+			Message: "ecs test",
+			Level:   slog.LevelInfo,
+			PC:      pc[0],
+		}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		origin, ok := js["log.origin"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		fileInfo, ok := origin["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileInfo["name"]).NotTo(BeEmpty())
+		Expect(fileInfo["line"]).To(BeNumerically(">", 0))
+		Expect(origin["function"]).NotTo(BeEmpty())
+	})
+
+	It("recognizes quoted format layouts with unmatched parentheses in delimiter scanning", func() {
+		// Time format containing unmatched parenthesis inside quotes
+		fmtWithParen := `%time(%"(2006-01-02"v) %msg(%v)`
+		h := logger.NewHandlerWithFormat(buf, nil, fmtWithParen)
+		r := slog.Record{
+			Time:    time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC),
+			Message: "paren_msg",
+		}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("(2026-11-07 paren_msg\n"))
+	})
+
+	It("formats negative fractional times correctly in unixmilli, unix_micro, and unixnano", func() {
+		// -500ms from epoch: instant is -0.500s
+		tNeg := time.Unix(-1, 500_000_000).UTC()
+		r := slog.Record{Time: tNeg, Message: "test"}
+
+		buf.Reset()
+		hMilli := logger.NewHandlerWithFormat(buf, nil, `%time(%"unixmilli"v)`)
+		Expect(hMilli.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("-0.500\n"))
+
+		buf.Reset()
+		hMicro := logger.NewHandlerWithFormat(buf, nil, `%time(%"unix_micro"v)`)
+		Expect(hMicro.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("-0.500000\n"))
+
+		buf.Reset()
+		hNano := logger.NewHandlerWithFormat(buf, nil, `%time(%"unixnano"v)`)
+		Expect(hNano.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("-0.500000000\n"))
+
+		// -1.250s
+		tNeg2 := time.Unix(-2, 750_000_000).UTC()
+		r2 := slog.Record{Time: tNeg2, Message: "test"}
+		buf.Reset()
+		Expect(hMilli.Handle(context.Background(), r2)).To(Succeed())
+		Expect(buf.String()).To(Equal("-1.250\n"))
+	})
+
+	It("handles encoding.TextMarshaler errors with a diagnostic fallback in text and JSON", func() {
+		bad := &ErrorTextMarshaler{}
+
+		// Text format: fallback without quotes
+		buf.Reset()
+		hText := logger.NewHandlerWithFormat(buf, nil, "%attr(%k=%v)\n")
+		rText := slog.Record{Message: "test"}
+		rText.Add(slog.Any("bad_field", bad))
+		Expect(hText.Handle(context.Background(), rText)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("bad_field=!ERROR: marshaler failure"))
+
+		// JSON format: fallback properly quoted
+		buf.Reset()
+		hJSON := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		hJSON.SetColor(false)
+		rJSON := slog.Record{Message: "test"}
+		rJSON.Add(slog.Any("bad_field", bad))
+		Expect(hJSON.Handle(context.Background(), rJSON)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["bad_field"]).To(Equal("!ERROR: marshaler failure"))
+	})
+
+	It("suppresses timestamp when ReplaceAttr returns zero slog.TimeKey in custom layouts, ECS, GELF, and Logstash", func() {
+		omitTimeOpts := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					return slog.Attr{}
+				}
+				return a
+			},
+		}
+
+		// Custom layout
+		buf.Reset()
+		hCustom := logger.NewHandlerWithFormat(buf, omitTimeOpts, `%time(%"RFC3339"v)%msg(%v)`)
+		Expect(hCustom.Handle(context.Background(), slog.Record{Time: testTime, Message: "hello"})).To(Succeed())
+		Expect(buf.String()).To(Equal("hello\n"))
+
+		// ECSFormat
+		buf.Reset()
+		hECS := logger.NewHandlerWithFormat(buf, omitTimeOpts, logger.ECSFormat)
+		Expect(hECS.Handle(context.Background(), slog.Record{Time: testTime, Message: "hello"})).To(Succeed())
+		var jsECS map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsECS)).To(Succeed())
+		Expect(jsECS["@timestamp"]).To(BeNil())
+
+		// GELFFormat
+		buf.Reset()
+		hGELF := logger.NewHandlerWithFormat(buf, omitTimeOpts, logger.GELFFormat)
+		Expect(hGELF.Handle(context.Background(), slog.Record{Time: testTime, Message: "hello"})).To(Succeed())
+		var jsGELF map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsGELF)).To(Succeed())
+		Expect(jsGELF["timestamp"]).To(BeNil())
+
+		// LogstashFormat
+		buf.Reset()
+		hLogstash := logger.NewHandlerWithFormat(buf, omitTimeOpts, logger.LogstashFormat)
+		Expect(hLogstash.Handle(context.Background(), slog.Record{Time: testTime, Message: "hello"})).To(Succeed())
+		var jsLogstash map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsLogstash)).To(Succeed())
+		Expect(jsLogstash["@timestamp"]).To(BeNil())
+	})
+
+	It("encodes non-finite floats as quoted error strings in JSON", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		h.SetColor(false)
+		r := slog.Record{Message: "floats"}
+		r.Add(
+			slog.Float64("nan", math.NaN()),
+			slog.Float64("pos_inf", math.Inf(1)),
+			slog.Float64("neg_inf", math.Inf(-1)),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["nan"]).To(Equal("!FLOAT:NaN"))
+		Expect(js["pos_inf"]).To(Equal("!FLOAT:+Inf"))
+		Expect(js["neg_inf"]).To(Equal("!FLOAT:-Inf"))
+	})
+
+	It("encodes maps, json.Marshaler, and control characters as structured JSON in JSON output path", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		h.SetColor(false)
+		r := slog.Record{Message: "structured"}
+		r.Add(
+			slog.Any("map_field", map[string]int{"alpha": 1, "beta": 2}),
+			slog.Any("custom_json", &CustomJSONType{Name: "item1"}),
+			slog.String("ctrl", "line\u0001text"),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		m, ok := js["map_field"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(m["alpha"]).To(BeEquivalentTo(1))
+		Expect(m["beta"]).To(BeEquivalentTo(2))
+
+		cj, ok := js["custom_json"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(cj["custom"]).To(Equal("item1"))
+		Expect(js["ctrl"]).To(Equal("line\u0001text"))
+	})
+
+	It("quotes keys and timestamps containing spaces or equals signs in TextFormat logfmt", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.TextFormat)
+		h.SetColor(false)
+		tSpace := time.Date(2026, 11, 7, 12, 30, 0, 0, time.UTC)
+		r := slog.Record{
+			Time:    tSpace,
+			Message: "logfmt test",
+			Level:   slog.LevelInfo,
+		}
+		r.Add(
+			slog.String("key with space", "val1"),
+			slog.String("key=with=equals", "val2"),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		out := buf.String()
+		Expect(out).To(ContainSubstring(`"key with space"="val1"`))
+		Expect(out).To(ContainSubstring(`"key=with=equals"="val2"`))
+	})
+
+	It("tracks explicit empty SetFormat independently and reapplies it on clone", func() {
+		lg := logger.GetLogger().Clone()
+		defer lg.Reset()
+
+		lg.SetFormat("")
+		Expect(lg.GetFormat()).To(Equal(logger.DefaultFormat))
+
+		cloned := lg.Clone()
+		Expect(cloned.GetFormat()).To(Equal(logger.DefaultFormat))
+	})
+
+	It("allows configuring emitter identity for GELF host", func() {
+		logger.SetEmitterIdentity("custom-service-host")
+		defer logger.SetEmitterIdentity("")
+
+		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
+		r := slog.Record{Message: "host test"}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["host"]).To(Equal("custom-service-host"))
+	})
 })
+
+type ErrorTextMarshaler struct{}
+
+func (e *ErrorTextMarshaler) MarshalText() ([]byte, error) {
+	return nil, errors.New("marshaler failure")
+}
+
+type CustomJSONType struct {
+	Name string `json:"name"`
+}
+
+func (c *CustomJSONType) MarshalJSON() ([]byte, error) {
+	return []byte(`{"custom":"` + c.Name + `"}`), nil
+}
