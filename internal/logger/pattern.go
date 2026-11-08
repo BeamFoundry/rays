@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/term"
 )
@@ -25,9 +26,9 @@ const (
 	// DefaultFormat is the default log pattern format using colored output.
 	DefaultFormat = "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
 	// TextFormat is the standard slog logfmt-style text pattern.
-	TextFormat = "%time(%k=%v )%level(%k=%v) %source(%k=%v )%msg(%k=%qv)%attr( %k=%qv)%grp(%attr( %g.%k=%qv))"
+	TextFormat = `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%v) %source(%ak=%v )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %ag.%ak=%qv))`
 	// JSONFormat is the standard JSON log format.
-	JSONFormat = `{%time(%qk:%qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	JSONFormat = `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
 	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// GELFFormat is the Graylog Extended Log Format (GELF) v1.1 JSON format.
@@ -423,28 +424,54 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	var s string
 	switch n.target {
 	case "k":
-		if strings.ContainsAny(ctx.currentAttr.Key, " =\"") {
-			s = formatJsonString(ctx.currentAttr.Key)
-		} else {
-			s = ctx.currentAttr.Key
-		}
+		s = ctx.currentAttr.Key
 	case "qk":
 		k := ctx.currentAttr.Key
 		if n.prefix != "" {
 			k = n.prefix + k
 		}
 		s = formatJsonString(k)
+	case "ak":
+		k := ctx.currentAttr.Key
+		if n.prefix != "" {
+			k = n.prefix + k
+		}
+		if needsQuoting(k) {
+			s = formatJsonString(k)
+		} else {
+			s = k
+		}
 	case "q_k":
 		s = formatJsonString("_" + ctx.currentAttr.Key)
+	case "a_k":
+		name := "_" + ctx.currentAttr.Key
+		if needsQuoting(name) {
+			s = formatJsonString(name)
+		} else {
+			s = name
+		}
 	case "v":
 		s = n.formatTimeOrValue(ctx, false)
 	case "qv":
 		s = n.formatTimeOrValue(ctx, true)
+	case "av":
+		s = n.formatTimeOrValue(ctx, false)
+		if needsQuoting(s) {
+			s = formatJsonString(s)
+		}
 	case "g":
 		s = ctx.currentGroup
 	case "qg":
 		if ctx.currentGroup != "" {
 			s = formatJsonString(ctx.currentGroup)
+		}
+	case "ag":
+		if ctx.currentGroup != "" {
+			if needsQuoting(ctx.currentGroup) {
+				s = formatJsonString(ctx.currentGroup)
+			} else {
+				s = ctx.currentGroup
+			}
 		}
 	case "q_gk", "q_g_k":
 		name := "_" + ctx.currentAttr.Key
@@ -455,6 +482,19 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 			name = n.prefix + name
 		}
 		s = formatJsonString(name)
+	case "a_gk", "a_g_k":
+		name := "_" + ctx.currentAttr.Key
+		if ctx.currentGroup != "" {
+			name = "_" + ctx.currentGroup + "_" + ctx.currentAttr.Key
+		}
+		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
+			name = n.prefix + name
+		}
+		if needsQuoting(name) {
+			s = formatJsonString(name)
+		} else {
+			s = name
+		}
 	default:
 	}
 	s = applyFormatModifier(s, n.minWidth, n.leftAlign, n.hasMax, n.maxWidth, n.truncEnd)
@@ -488,13 +528,20 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 		}
 		return formatted
 	}
-	formatted := ctx.formatCurrentValue(quote)
-	if !quote && ctx.isKey && ctx.currentAttr.Key == slog.TimeKey {
-		if strings.Contains(formatted, " ") {
-			formatted = strconv.Quote(formatted)
+	return ctx.formatCurrentValue(quote)
+}
+
+// needsQuoting reports whether a key, group, or value string requires quoting in logfmt/text format.
+func needsQuoting(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, r := range s {
+		if r <= ' ' || r == '=' || r == '"' || r == 0x7f || unicode.IsSpace(r) || unicode.IsControl(r) {
+			return true
 		}
 	}
-	return formatted
+	return false
 }
 
 // formatUnixFractional formats seconds and sub-second nanoseconds as a signed decimal fraction.
@@ -679,7 +726,7 @@ func hasTimeFormat(node PatternNode) bool {
 	}
 }
 
-var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|qk|qv|qg|k|v|g)`)
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|qk|qv|qg|a_gk|a_g_k|a_k|ak|av|ag|k|v|g)`)
 
 // matchFormatSpec parses a value or key format placeholder (%[-][min][.[-]max]["layout"]target).
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
@@ -694,7 +741,7 @@ func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 	}
 	timeFormat := ""
 	target := m[7]
-	if target == "v" || target == "qv" {
+	if target == "v" || target == "qv" || target == "av" {
 		timeFormat = prefix
 	}
 	leftAlign := m[2] == "-"

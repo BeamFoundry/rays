@@ -118,8 +118,8 @@ Rays provides several pre-configured log handlers covering local development, st
 | Handler | Description | Underlying Pattern |
 | :--- | :--- | :--- |
 | `DEFAULT` | Human-readable console format with ANSI colors and styles | `%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}` |
-| `TEXT` | Standard `logfmt` key-value style | `%time(%k=%v )%level(%k=%v) %source(%k=%v )%msg(%k=%qv)%attr( %k=%qv)%grp(%attr( %g.%k=%qv))` |
-| `JSON` | Compact, standard JSON log output | `{%time(%qk:%qv,)%level(%qk:%qv)%source(,%qk:%qv),%msg(%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%v) %source(%ak=%v )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %ag.%ak=%qv))` |
+| `JSON` | Compact, standard JSON log output | `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1","host":"localhost",%time("timestamp":%"UnixMilli"v,)%level("level":%qv),%msg("short_message":%qv)%source(,"_source":%qv)%attr(,"_%k":%qv)%grp(,"_%g":{%attr(%qk:%qv%nl(,))})}` |
 | `LOGSTASH` | Logstash JSON event format | `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
@@ -135,31 +135,38 @@ Rays features a compiled pattern layout engine. The format pattern string is par
 
 | Placeholder | Description | Inner Value Targets |
 | :--- | :--- | :--- |
-| `%time(...)` | Renders the log record timestamp | Generic placeholders `%v`, `%qv`, or custom layout `%"<layout>"v` |
-| `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv` |
-| `%source(...)` | Renders the reduced source file and line (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%k=%v` |
-| `%msg(...)` | Renders the log message | Generic placeholders `%v`, `%qv`, `%k=%qv` |
-| `%attr(...)` | Iterates over top-level structured attributes | Generic placeholders `%k`, `%qk`, `%v`, `%qv` and delimiter `%nl(...)` |
-| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, nested `%attr(...)` |
+| `%time(...)` | Renders the log record timestamp | Generic placeholders `%v`, `%qv`, `%av`, or custom layout `%"<layout>"v`, `%"<layout>"qv`, `%"<layout>"av` |
+| `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv`, `%av` |
+| `%source(...)` | Renders the reduced source file and line (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%av`, `%k=%v` |
+| `%msg(...)` | Renders the log message | Generic placeholders `%v`, `%qv`, `%av`, `%k=%qv` |
+| `%attr(...)` | Iterates over top-level structured attributes | Generic placeholders `%k`, `%qk`, `%ak`, `%v`, `%qv`, `%av` and delimiter `%nl(...)` |
+| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, `%ag`, nested `%attr(...)` |
 | `%nl(...)` | Renders its contents only if the current item is **not the last** | Static delimiter (e.g. `%nl(,)` or `%nl( )`), used inside `%attr(...)` |
 | `%clr(...)` | Wraps inner content in ANSI color and mode escape sequences | See [ANSI Styling](#ansi-styling) below |
 
 ### Generic Placeholders & Specifiers
 
-- **Generic Placeholders (`%k`, `%qk`, `%v`, `%qv`)**:
-  These are generic placeholders that apply across all placeholders:
+- **Generic Placeholders (`%k`, `%qk`, `%ak`, `%v`, `%qv`, `%av`)**:
+  These generic placeholders apply across field placeholders and structured attributes:
   - In `%time(...)`: `%k` represents `"time"`, and `%v` represents the formatted timestamp value.
   - In `%level(...)`: `%k` represents `"level"`, and `%v` represents the level name (e.g. `INFO`).
   - In `%source(...)`: `%k` represents `"source"`, and `%v` represents the source file and line.
   - In `%msg(...)`: `%k` represents `"msg"`, and `%v` represents the log message.
   - In `%attr(...)`: `%k` represents the attribute key, and `%v` represents the attribute value.
-  - `%qk` and `%qv` are the quoted counterparts of `%k` and `%v` (e.g. `"key"` and `"value"`), useful for JSON or escaped outputs.
+  - **Quoting variations**:
+    - `%k` and `%v`: Raw, unquoted values as-is.
+    - `%qk` and `%qv`: Quoted counterparts, always enclosed in double quotes (e.g. `"key"` and `"value"`), escaped for JSON or quoted logfmt.
+    - `%ak` and `%av`: Automatic quoted counterparts. Values and keys are printed unquoted by default, but automatically quoted with double quotes if they contain spaces, equals signs (`=`), double quotes (`"`), control characters, or if empty.
 
 - **Attribute Delimiter (`%nl`)**:
   `%nl(...)` applies **only inside `%attr(...)`**. It outputs its enclosed content only if the current attribute is **not the last** item in the iteration, making it ideal for delimiters (such as `%nl(,)` or `%nl( )`).
 
-- **Group Specifiers (`%g`, `%qg`)**:
-  `%g` (raw string) and `%qg` (quoted string) apply **only inside `%grp(...)`** to render the group name. Attributes within the group are iterated using a nested `%attr(...)`.
+- **Group Specifiers (`%g`, `%qg`, `%ag`)**:
+  Apply **only inside `%grp(...)`** to render the group name:
+  - `%g`: Raw unquoted group name.
+  - `%qg`: Always quoted group name.
+  - `%ag`: Automatic quoted group name (quoted only if containing spaces, equals signs, quotes, or control characters).
+  Attributes within the group are iterated using a nested `%attr(...)`.
 
 ### Padding and Truncation Modifiers
 
@@ -180,9 +187,10 @@ The `%time(...)` placeholder supports custom formatting layouts specified in dou
 ```
 %time(%"<layout>"v)
 %time(%"<layout>"qv)
+%time(%"<layout>"av)
 ```
 
-When no custom layout is specified (such as `%time(%v)`), the default timestamp format used by Rays is `"2006/01/02 15:04:05.000"`.
+When no custom layout is specified (such as `%time(%v)`), the default timestamp format used by Rays is `"2006/01/02 15:04:05.000"` (unquoted with `%v`, automatically quoted with `%av`, and always quoted with `%qv`).
 
 ### Predefined Epoch & Timestamp Layouts
 

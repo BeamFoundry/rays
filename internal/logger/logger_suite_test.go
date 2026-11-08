@@ -1909,6 +1909,142 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		logger.AppendFormattedValue(b, slog.AnyValue(NonNilPanicker{}), true)
 		Expect(b.String()).To(ContainSubstring("!PANIC: boom"))
 	})
+
+	It("supports %av, %ak, and %ag automatic quoting", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "%attr(%ak=%av%nl( ))")
+		r := slog.Record{Time: testTime, Message: "test"}
+		r.Add(
+			slog.String("simple_key", "simple_val"),
+			slog.String("key with space", "val with space"),
+			slog.String("key=equals", "val=equals"),
+			slog.String("empty_val", ""),
+			slog.Int("num", 42),
+			slog.Bool("flag", true),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		out := buf.String()
+		Expect(out).To(ContainSubstring("simple_key=simple_val"))
+		Expect(out).To(ContainSubstring(`"key with space"="val with space"`))
+		Expect(out).To(ContainSubstring(`"key=equals"="val=equals"`))
+		Expect(out).To(ContainSubstring(`empty_val=""`))
+		Expect(out).To(ContainSubstring("num=42"))
+		Expect(out).To(ContainSubstring("flag=true"))
+	})
+
+	It("keeps %time(%v) unquoted and quotes %time(%av) when layout has spaces", func() {
+		optsTime := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					if t, ok := a.Value.Any().(time.Time); ok {
+						a.Value = slog.StringValue(t.Format("2006/01/02 15:04:05.000"))
+					}
+				}
+				return a
+			},
+		}
+
+		buf.Reset()
+		hRaw := logger.NewHandlerWithFormat(buf, optsTime, "%time(%v)%msg(%v)\n")
+		r := slog.Record{Time: time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC), Message: "msg"}
+		Expect(hRaw.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("2026/11/08 12:00:00.000msg\n"))
+
+		buf.Reset()
+		hAuto := logger.NewHandlerWithFormat(buf, optsTime, "%time(%av)%msg(%v)\n")
+		Expect(hAuto.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"2026/11/08 12:00:00.000\"msg\n"))
+
+		buf.Reset()
+		hRFC := logger.NewHandlerWithFormat(buf, nil, `%time(%"RFC3339"av)%msg(%v)`+"\n")
+		Expect(hRFC.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("2026-11-08T12:00:00Zmsg\n"))
+
+		buf.Reset()
+		hCustom := logger.NewHandlerWithFormat(buf, nil, `%time(%"2006/01/02 15:04:05"av)%msg(%v)`+"\n")
+		Expect(hCustom.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"2026/11/08 12:00:00\"msg\n"))
+
+		buf.Reset()
+		hQV := logger.NewHandlerWithFormat(buf, nil, "%time(%qv)\n")
+		Expect(hQV.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal(`"` + r.Time.Format(time.RFC3339) + "\"\n"))
+	})
+
+	It("keeps raw %k and %g unquoted even with spaces", func() {
+		buf.Reset()
+		h := logger.NewHandlerWithFormat(buf, nil, "%grp(%g:%attr(%k=%v))")
+		hGroup := h.WithGroup("my group")
+		r := slog.Record{Time: testTime, Message: "test"}
+		r.Add(slog.String("my key", "val"))
+		Expect(hGroup.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("my group:my key=val\n"))
+	})
+
+	It("formats %ag, %a_k, and %a_gk with auto-quoting", func() {
+		buf.Reset()
+		hAutoGroup := logger.NewHandlerWithFormat(buf, nil, "%grp(%ag:%attr(%ak=%v))")
+		hG := hAutoGroup.WithGroup("spaced group")
+		r := slog.Record{Time: testTime, Message: "test"}
+		r.Add(slog.String("key", "val"))
+		Expect(hG.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"spaced group\":key=val\n"))
+
+		buf.Reset()
+		hG2 := hAutoGroup.WithGroup("simplegroup")
+		Expect(hG2.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("simplegroup:key=val\n"))
+
+		buf.Reset()
+		hEmptyGroup := logger.NewHandlerWithFormat(buf, nil, "%ag%attr(%ak=%v)")
+		rEmpty := slog.Record{Time: testTime, Message: "test"}
+		rEmpty.Add(slog.String("key", "val"))
+		Expect(hEmptyGroup.Handle(context.Background(), rEmpty)).To(Succeed())
+		Expect(buf.String()).To(Equal("key=val\n"))
+
+		buf.Reset()
+		hPfxAK := logger.NewHandlerWithFormat(buf, nil, `%attr(%"pfx."ak=%v%nl( ))`)
+		rPfx := slog.Record{Time: testTime, Message: "test"}
+		rPfx.Add(slog.String("plain", "1"), slog.String("has space", "2"))
+		Expect(hPfxAK.Handle(context.Background(), rPfx)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx.plain=1"))
+		Expect(buf.String()).To(ContainSubstring(`"pfx.has space"=2`))
+
+		buf.Reset()
+		hAK := logger.NewHandlerWithFormat(buf, nil, "%attr(%a_k=%v%nl( ))")
+		rAK := slog.Record{Time: testTime, Message: "test"}
+		rAK.Add(slog.String("plain", "1"), slog.String("has space", "2"))
+		Expect(hAK.Handle(context.Background(), rAK)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_plain=1"))
+		Expect(buf.String()).To(ContainSubstring(`"_has space"=2`))
+
+		buf.Reset()
+		hAGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"g_"a_gk=%v%nl( )))`)
+		hG3 := hAGK.WithGroup("grp")
+		rAGK := slog.Record{Time: testTime, Message: "test"}
+		rAGK.Add(slog.String("item", "1"), slog.String("spaced item", "2"))
+		Expect(hG3.Handle(context.Background(), rAGK)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("g__grp_item=1"))
+		Expect(buf.String()).To(ContainSubstring(`"g__grp_spaced item"=2`))
+
+		buf.Reset()
+		hNoGrpAGK := logger.NewHandlerWithFormat(buf, nil, "%attr(%a_gk=%v%nl( ))")
+		rAGK2 := slog.Record{Time: testTime, Message: "test"}
+		rAGK2.Add(slog.String("item", "1"), slog.String("spaced item", "2"))
+		Expect(hNoGrpAGK.Handle(context.Background(), rAGK2)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_item=1"))
+		Expect(buf.String()).To(ContainSubstring(`"_spaced item"=2`))
+	})
+
+	It("covers needsQuoting branches", func() {
+		Expect(logger.NeedsQuoting("")).To(BeTrue())
+		Expect(logger.NeedsQuoting("hello")).To(BeFalse())
+		Expect(logger.NeedsQuoting("hello world")).To(BeTrue())
+		Expect(logger.NeedsQuoting("k=v")).To(BeTrue())
+		Expect(logger.NeedsQuoting(`"quote"`)).To(BeTrue())
+		Expect(logger.NeedsQuoting(string([]byte{0x7f}))).To(BeTrue())
+		Expect(logger.NeedsQuoting("line\nbreak")).To(BeTrue())
+		Expect(logger.NeedsQuoting("Montréal")).To(BeFalse())
+	})
 })
 
 type ErrorTextMarshaler struct{}
