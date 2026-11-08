@@ -38,4 +38,19 @@ var (
 		v, ok := functionCache[fn]
 		return v, ok
 	}
+	SetFunctionCacheLimit = func(limit int) {
+		functionLock.Lock()
+		defer functionLock.Unlock()
+		maxFunctionCacheSize = limit
+	}
+	ResetFunctionCacheLimit = func() {
+		functionLock.Lock()
+		defer functionLock.Unlock()
+		maxFunctionCacheSize = defaultMaxFunctionCacheSize
+	}
+	GetFunctionCacheLen = func() int {
+		functionLock.Lock()
+		defer functionLock.Unlock()
+		return len(functionCache)
+	}
 )

@@ -2503,6 +2503,50 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hTextEmpty := logger.NewHandlerWithFormat(buf, optsEmptyRecvSrc, logger.TextFormat)
 		Expect(hTextEmpty.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pkg.(*)(server.go:42)"))
+
+		// Generic pointer method reduction
+		Expect(logger.ReduceFunctionName("pkg.(*Box[...]).Get")).To(Equal("pkg.Box"))
+		Expect(logger.ReduceFunctionName("github.com/BeamFoundry/rays/pkg.(*Box[...]).Get")).To(Equal("g/B/rays/pkg.Box"))
+
+		// Text rendering of generic pointer method preserves method name and reduces correctly
+		buf.Reset()
+		optsGenericSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, &slog.Source{
+						Function: "pkg.(*Box[...]).Get",
+						File:     "server.go",
+						Line:     42,
+					})
+				}
+				return a
+			},
+		}
+		hTextGeneric := logger.NewHandlerWithFormat(buf, optsGenericSrc, logger.TextFormat)
+		Expect(hTextGeneric.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pkg.Box(server.go:42)"))
+	})
+
+	It("bounds functionCache so distinct valid names cannot accumulate without limit", func() {
+		logger.SetFunctionCacheLimit(logger.GetFunctionCacheLen() + 1)
+		defer logger.ResetFunctionCacheLimit()
+
+		fn1 := "github.com/BeamFoundry/rays/pkg/testpkg.FuncOne"
+		fn2 := "github.com/BeamFoundry/rays/pkg/testpkg.FuncTwo"
+
+		// First call fits within limit and is cached
+		res1 := logger.ReduceFunctionName(fn1)
+		Expect(res1).To(Equal("g/B/rays/p/testpkg.FuncOne"))
+		cached, ok := logger.GetFunctionCacheEntry(fn1)
+		Expect(ok).To(BeTrue())
+		Expect(cached).To(Equal(res1))
+
+		// Second call exceeds limit: formatting is preserved, but not retained in cache
+		res2 := logger.ReduceFunctionName(fn2)
+		Expect(res2).To(Equal("g/B/rays/p/testpkg.FuncTwo"))
+		_, ok2 := logger.GetFunctionCacheEntry(fn2)
+		Expect(ok2).To(BeFalse())
 	})
 
 	It("handles typed-nil *slog.Source in source formatting paths", func() {
