@@ -41,6 +41,8 @@ const (
 	keySource      = "source"
 	keyHost        = "host"
 	ansiReset      = "\033[0m"
+	strNull        = "null"
+	strNilText     = "<nil>"
 )
 
 // collectedAttr represents a flattened log attribute along with its group path segments.
@@ -340,7 +342,15 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 		attrCtx := *ctx
 		attrCtx.currentAttr = item.attr
 		if len(item.groups) > 0 {
-			attrCtx.currentGroup = strings.Join(item.groups, ".")
+			if ctx.isGELF {
+				encodedGroups := make([]string, len(item.groups))
+				for idx, g := range item.groups {
+					encodedGroups[idx] = encodeGELFKey(g)
+				}
+				attrCtx.currentGroup = strings.Join(encodedGroups, ".")
+			} else {
+				attrCtx.currentGroup = strings.Join(item.groups, ".")
+			}
 		} else {
 			attrCtx.currentGroup = ""
 		}
@@ -470,9 +480,6 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 // renderKey formats a single attribute or record key with optional prefix and quoting.
 func (n *ValueFormatNode) renderKey(ctx *renderContext) string {
 	k := ctx.currentAttr.Key
-	if strings.Contains(n.target, "_") && strings.Contains(n.target, "q") {
-		k = encodeGELFKey(k)
-	}
 	switch {
 	case strings.HasPrefix(n.target, "_."):
 		k = "_." + k
@@ -499,6 +506,10 @@ func (n *ValueFormatNode) renderKey(ctx *renderContext) string {
 		}
 	}
 
+	if strings.Contains(n.target, "_") && strings.Contains(n.target, "q") {
+		k = encodeGELFKey(k)
+	}
+
 	switch {
 	case strings.Contains(n.target, "q"):
 		return formatJsonString(k)
@@ -516,66 +527,85 @@ func (n *ValueFormatNode) renderKey(ctx *renderContext) string {
 func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 	isDotted := strings.Contains(n.target, ".") || n.target == "gk" || n.target == "qgk" || n.target == "agk"
 	isUnderscore := strings.Contains(n.target, "_")
+	isGELFEncoding := isUnderscore && strings.Contains(n.target, "q")
+
+	prefix := n.prefix
+	attrKey := ctx.currentAttr.Key
+	groupName := ctx.currentGroup
+
+	if isGELFEncoding {
+		if prefix != "" {
+			prefix = encodeGELFKey(prefix)
+		}
+		attrKey = encodeGELFKey(attrKey)
+		if groupName != "" {
+			parts := strings.Split(groupName, ".")
+			for i, p := range parts {
+				parts[i] = encodeGELFKey(p)
+			}
+			groupName = strings.Join(parts, ".")
+		}
+	}
 
 	var name string
 	if ctx.inAttr && (isDotted || isUnderscore) {
 		switch {
 		case isDotted && isUnderscore:
-			name = ctx.currentAttr.Key
-			if ctx.currentGroup != "" {
-				name = ctx.currentGroup + "." + ctx.currentAttr.Key
+			name = attrKey
+			if groupName != "" {
+				name = groupName + "." + attrKey
 			}
 			name = "_" + name
-			if n.prefix != "" {
-				name = n.prefix + name
+			if prefix != "" {
+				name = prefix + name
 			}
 		case isDotted:
-			name = ctx.currentAttr.Key
-			if ctx.currentGroup != "" {
-				name = ctx.currentGroup + "." + ctx.currentAttr.Key
+			name = attrKey
+			if groupName != "" {
+				name = groupName + "." + attrKey
 			}
-			if n.prefix != "" {
-				if strings.HasSuffix(n.prefix, ".") {
-					name = n.prefix + name
+			if prefix != "" {
+				if strings.HasSuffix(prefix, ".") {
+					name = prefix + name
 				} else {
-					name = n.prefix + "." + name
+					name = prefix + "." + name
 				}
 			}
 		default:
-			name = ctx.currentAttr.Key
-			if ctx.currentGroup != "" {
-				name = ctx.currentGroup + "_" + ctx.currentAttr.Key
+			name = attrKey
+			if groupName != "" {
+				name = groupName + "_" + attrKey
 			}
 			name = "_" + name
-			if n.prefix != "" {
-				name = n.prefix + name
+			if prefix != "" {
+				name = prefix + name
 			}
 		}
 	} else {
-		name = ctx.currentGroup
+		name = groupName
 		if name != "" {
 			switch {
 			case isDotted && isUnderscore:
 				name = "_" + name
-				if n.prefix != "" {
-					name = n.prefix + name
+				if prefix != "" {
+					name = prefix + name
 				}
 			case isDotted:
-				if n.prefix != "" {
-					if strings.HasSuffix(n.prefix, ".") {
-						name = n.prefix + name
+				if prefix != "" {
+					if strings.HasSuffix(prefix, ".") {
+						name = prefix + name
 					} else {
-						name = n.prefix + "." + name
+						name = prefix + "." + name
 					}
 				}
 			case isUnderscore:
 				name = "_" + name
-				if n.prefix != "" {
-					name = n.prefix + name
+				if prefix != "" {
+					name = prefix + name
 				}
 			default:
-				if n.prefix != "" {
-					name = n.prefix + name
+				if prefix != "" {
+					name = prefix + name
 				}
 			}
 		}
@@ -583,10 +613,6 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 
 	if name == "" && !ctx.inAttr {
 		return ""
-	}
-
-	if isUnderscore && strings.Contains(n.target, "q") {
-		name = encodeGELFKey(name)
 	}
 
 	isQuoted := strings.Contains(n.target, "q")
@@ -639,32 +665,54 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 // formatSource formats caller source information according to a custom layout, using ReplaceAttr value if available.
 func (n *ValueFormatNode) formatSource(ctx *renderContext) string {
 	isJsonLayout := strings.ToLower(strings.TrimSpace(n.timeFormat)) == "json"
-	if ctx.currentAttr.Value.Kind() == slog.KindString {
-		if isJsonLayout {
-			return formatJsonString(ctx.currentAttr.Value.String())
-		}
-		return ctx.currentAttr.Value.String()
-	}
-	if src, ok := ctx.currentAttr.Value.Any().(*slog.Source); ok {
-		if src == nil {
+	val := ctx.currentAttr.Value.Resolve()
+
+	if ctx.currentAttr.Key == slog.SourceKey {
+		if val.Any() == nil {
 			if isJsonLayout {
-				return "null"
+				return strNull
 			}
-			return "<nil>"
+			return strNilText
 		}
-		if isJsonLayout {
-			return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
-				formatJsonString(filepath.Base(src.File)),
-				src.Line,
-				formatJsonString(src.Function),
-			)
+		if s, ok := val.Any().(*slog.Source); ok && s == nil {
+			if isJsonLayout {
+				return strNull
+			}
+			return strNilText
 		}
-		return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
-	}
-	if ctx.currentAttr.Value.Any() != nil {
-		return formatValue(ctx.currentAttr.Value, isJsonLayout)
+		if val.Kind() == slog.KindString {
+			if isJsonLayout {
+				return formatJsonString(val.String())
+			}
+			return val.String()
+		}
+		var src *slog.Source
+		switch s := val.Any().(type) {
+		case *slog.Source:
+			src = s
+		case slog.Source:
+			src = &s
+		default:
+		}
+		if src != nil {
+			if isJsonLayout {
+				return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
+					formatJsonString(filepath.Base(src.File)),
+					src.Line,
+					formatJsonString(src.Function),
+				)
+			}
+			return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+		}
+		return formatValue(val, isJsonLayout)
 	}
 
+	if ctx.record.PC == 0 {
+		if isJsonLayout {
+			return strNull
+		}
+		return strNilText
+	}
 	fs := runtime.CallersFrames([]uintptr{ctx.record.PC})
 	f, _ := fs.Next()
 	src := &slog.Source{
@@ -682,9 +730,9 @@ func (n *ValueFormatNode) formatSource(ctx *renderContext) string {
 	return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 }
 
-// isGELFKeyChar reports whether a character is valid in GELF field names ([a-zA-Z0-9_.-]).
+// isGELFKeyChar reports whether a character is valid in GELF field names ([a-zA-Z0-9_-]).
 func isGELFKeyChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
 }
 
 // encodeGELFKey encodes characters invalid in GELF field names into non-colliding hex escape sequences.
@@ -1217,19 +1265,33 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 			}
 			return s
 		case slog.SourceKey:
+			if v.Any() == nil {
+				if quote {
+					return strNull
+				}
+				return strNilText
+			}
+			if s, ok := v.Any().(*slog.Source); ok && s == nil {
+				if quote {
+					return strNull
+				}
+				return strNilText
+			}
 			if v.Kind() == slog.KindString {
 				if quote {
 					return formatJsonString(v.String())
 				}
 				return v.String()
 			}
-			if src, ok := v.Any().(*slog.Source); ok {
-				if src == nil {
-					if quote {
-						return "null"
-					}
-					return "<nil>"
-				}
+			var src *slog.Source
+			switch s := v.Any().(type) {
+			case *slog.Source:
+				src = s
+			case slog.Source:
+				src = &s
+			default:
+			}
+			if src != nil {
 				formatted := fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 				if quote {
 					return formatJsonString(formatted)
@@ -1341,10 +1403,10 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 		if v.Any() == nil {
 			if quote {
 				//nolint:errcheck // buffer write cannot fail
-				buf.WriteString("null")
+				buf.WriteString(strNull)
 			} else {
 				//nolint:errcheck // buffer write cannot fail
-				buf.WriteString("<nil>")
+				buf.WriteString(strNilText)
 			}
 			return
 		}
@@ -1353,9 +1415,9 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 				if val := reflect.ValueOf(v.Any()); val.Kind() == reflect.Pointer && val.IsNil() {
 					if quote {
 						//nolint:errcheck // buffer write cannot fail
-						buf.WriteString("null")
+						buf.WriteString(strNull)
 					} else {
-						appendString(buf, "<nil>", false)
+						appendString(buf, strNilText, false)
 					}
 					return
 				}
@@ -1375,9 +1437,9 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 			if cv == nil {
 				if quote {
 					//nolint:errcheck // buffer write cannot fail
-					buf.WriteString("null")
+					buf.WriteString(strNull)
 				} else {
-					appendString(buf, "<nil>", false)
+					appendString(buf, strNilText, false)
 				}
 				return
 			}
@@ -1391,9 +1453,9 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 			if val.Kind() == reflect.Pointer && val.IsNil() {
 				if quote {
 					//nolint:errcheck // buffer write cannot fail
-					buf.WriteString("null")
+					buf.WriteString(strNull)
 				} else {
-					appendString(buf, "<nil>", false)
+					appendString(buf, strNilText, false)
 				}
 				return
 			}

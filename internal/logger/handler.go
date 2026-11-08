@@ -280,7 +280,11 @@ func buildGroupInfos(allAttrs []collectedAttr, mode groupFormatMode) []groupInfo
 		var groups []groupInfo
 		for _, a := range allAttrs {
 			if len(a.groups) > 0 {
-				key := strings.Join(a.groups, ".")
+				encodedGroups := make([]string, len(a.groups))
+				for i, g := range a.groups {
+					encodedGroups[i] = encodeGELFKey(g)
+				}
+				key := strings.Join(encodedGroups, ".")
 				if idx, found := groupMap[key]; found {
 					groups[idx].attrs = append(groups[idx].attrs, a.attr)
 				} else {

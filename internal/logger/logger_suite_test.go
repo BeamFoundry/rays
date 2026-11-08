@@ -1787,6 +1787,12 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		r.Add(slog.Group("env", slog.String("mode", "prod")))
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(Equal("mode=prod\n"))
+
+		// In GELF mode without group directive
+		buf.Reset()
+		hGELFNoGrp := logger.NewHandlerWithFormat(buf, nil, `{"version":"1.1",%attr(%_qg=%v)}`+"\n")
+		Expect(hGELFNoGrp.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"_env_mode"=prod`))
 	})
 
 	It("renders deep nested groups and multiple child groups in JSON format", func() {
@@ -2332,13 +2338,19 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
 		r := slog.Record{Time: testTime, Message: "collision check"}
 		r.Add(slog.String("user_id", "top_user_val"))
+		r.Add(slog.String("user.id", "top_user_dot_val"))
 		r.Add(slog.Group("user", slog.String("id", "grouped_user_val")))
+		r.Add(slog.Group("user.profile", slog.String("id", "literal_dot_grp_val")))
+		r.Add(slog.Group("user", slog.Group("profile", slog.String("id", "nested_grp_val"))))
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
 		Expect(js["_user_id"]).To(Equal("top_user_val"))
+		Expect(js["_user_x2eid"]).To(Equal("top_user_dot_val"))
 		Expect(js["_user.id"]).To(Equal("grouped_user_val"))
+		Expect(js["_user_x2eprofile.id"]).To(Equal("literal_dot_grp_val"))
+		Expect(js["_user.profile.id"]).To(Equal("nested_grp_val"))
 	})
 
 	It("JSON-encodes maps, structs, and slices as strings in GELFFormat additional fields", func() {
@@ -2410,6 +2422,26 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hCustomNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `%source(%"custom"v)`+"\n")
 		Expect(hCustomNilSrc.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(Equal("<nil>\n"))
+
+		// Untyped nil in formatCurrentValue
+		optsUntypedNil := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, nil)
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hUntypedNilV := logger.NewHandlerWithFormat(buf, optsUntypedNil, `%source(%v)`+"\n")
+		Expect(hUntypedNilV.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("<nil>\n"))
+
+		buf.Reset()
+		hUntypedNilQV := logger.NewHandlerWithFormat(buf, optsUntypedNil, `%source(%qv)`+"\n")
+		Expect(hUntypedNilQV.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("null\n"))
 	})
 
 	It("formats ReplaceAttr source value in JSON, ECS, and Logstash layouts without reconstructing PC", func() {
@@ -2466,6 +2498,108 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		srcObj, ok := jsStruct["source"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(srcObj["custom"]).To(Equal("custom_src"))
+
+		// ReplaceAttr with TestLogValuer resolving to *slog.Source in JSON, ECS, and Logstash
+		optsValuerSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, TestLogValuer{Val: &slog.Source{
+						Function: "pkg.ValuerFunc",
+						File:     "/path/to/valuer_file.go",
+						Line:     42,
+					}})
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hECSValuer := logger.NewHandlerWithFormat(buf, optsValuerSrc, logger.ECSFormat)
+		Expect(hECSValuer.Handle(context.Background(), r)).To(Succeed())
+		var jsECSValuer map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsECSValuer)).To(Succeed())
+		originValuer, ok := jsECSValuer["log.origin"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		fileValuer, ok := originValuer["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileValuer["name"]).To(Equal("valuer_file.go"))
+		Expect(fileValuer["line"]).To(BeEquivalentTo(42))
+		Expect(originValuer["function"]).To(Equal("pkg.ValuerFunc"))
+
+		buf.Reset()
+		hJSONValuer := logger.NewHandlerWithFormat(buf, optsValuerSrc, logger.JSONFormat)
+		Expect(hJSONValuer.Handle(context.Background(), r)).To(Succeed())
+		var jsJSONValuer map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsJSONValuer)).To(Succeed())
+		srcValuerJSON, ok := jsJSONValuer["source"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		fileValuerJSON, ok := srcValuerJSON["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileValuerJSON["name"]).To(Equal("valuer_file.go"))
+
+		buf.Reset()
+		hLogstashValuer := logger.NewHandlerWithFormat(buf, optsValuerSrc, logger.LogstashFormat)
+		Expect(hLogstashValuer.Handle(context.Background(), r)).To(Succeed())
+		var jsLogstashValuer map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsLogstashValuer)).To(Succeed())
+		srcValuerLogstash, ok := jsLogstashValuer["source"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		fileValuerLogstash, ok := srcValuerLogstash["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileValuerLogstash["name"]).To(Equal("valuer_file.go"))
+
+		// ReplaceAttr with TestLogValuer resolving to string and struct
+		optsValuerStr := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, TestLogValuer{Val: "valuer_string_src"})
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hJSONValuerStr := logger.NewHandlerWithFormat(buf, optsValuerStr, logger.JSONFormat)
+		Expect(hJSONValuerStr.Handle(context.Background(), r)).To(Succeed())
+		var jsValuerStr map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsValuerStr)).To(Succeed())
+		Expect(jsValuerStr["source"]).To(Equal("valuer_string_src"))
+
+		// ReplaceAttr with slog.Source by value
+		optsValSource := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, slog.Source{
+						Function: "pkg.DirectValFunc",
+						File:     "/path/to/direct_file.go",
+						Line:     88,
+					})
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hECSDirect := logger.NewHandlerWithFormat(buf, optsValSource, logger.ECSFormat)
+		Expect(hECSDirect.Handle(context.Background(), r)).To(Succeed())
+		var jsECSDirect map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsECSDirect)).To(Succeed())
+		originDirect, ok := jsECSDirect["log.origin"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		fileDirect, ok := originDirect["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileDirect["name"]).To(Equal("direct_file.go"))
+
+		// Direct value source in unquoted and quoted text
+		buf.Reset()
+		hTextDirect := logger.NewHandlerWithFormat(buf, optsValSource, `%source(%"custom"v)`+"\n")
+		Expect(hTextDirect.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("DirectValFunc(direct_file.go:88)"))
+
+		buf.Reset()
+		hTextCurrent := logger.NewHandlerWithFormat(buf, optsValSource, `%source(%v)`+"\n")
+		Expect(hTextCurrent.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("DirectValFunc(direct_file.go:88)"))
 	})
 
 	It("preserves dotted and underscore separators for empty attribute keys inside groups", func() {
@@ -2494,21 +2628,31 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 				return a
 			},
 		}
-		// Fallback with PC in JSON layout
+		// ReplaceAttr replacement of slog.SourceKey with nil preserves null in JSON layout
 		buf.Reset()
 		hFallbackJSON := logger.NewHandlerWithFormat(buf, optsNilVal, logger.JSONFormat)
 		rWithPC := slog.Record{Time: testTime, Message: "fb", PC: getFramePointer()}
 		Expect(hFallbackJSON.Handle(context.Background(), rWithPC)).To(Succeed())
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
-		Expect(js["source"]).NotTo(BeNil())
+		Expect(js["source"]).To(BeNil())
 
-		// Fallback with PC in unquoted custom layout
+		// ReplaceAttr replacement of slog.SourceKey with nil preserves <nil> in unquoted custom layout
 		buf.Reset()
 		hFallbackCustom := logger.NewHandlerWithFormat(buf, optsNilVal, `%source(%"custom"v)`+"\n")
 		Expect(hFallbackCustom.Handle(context.Background(), rWithPC)).To(Succeed())
-		Expect(buf.String()).To(ContainSubstring("("))
-		Expect(buf.String()).To(ContainSubstring(")"))
+		Expect(buf.String()).To(Equal("<nil>\n"))
+
+		// Fallback when no replacement source attribute is present (key is empty)
+		jsonFallback := logger.FormatSourceHelper("json", slog.Attr{}, getFramePointer())
+		Expect(jsonFallback).To(ContainSubstring(`"file":{"name":`))
+		customFallback := logger.FormatSourceHelper("custom", slog.Attr{}, getFramePointer())
+		Expect(customFallback).To(ContainSubstring("("))
+		Expect(customFallback).To(ContainSubstring(")"))
+
+		// Fallback when no replacement source attribute is present and PC is 0
+		Expect(logger.FormatSourceHelper("json", slog.Attr{}, 0)).To(Equal("null"))
+		Expect(logger.FormatSourceHelper("custom", slog.Attr{}, 0)).To(Equal("<nil>"))
 
 		// String replacement in unquoted custom layout
 		optsStr := &slog.HandlerOptions{
@@ -2550,6 +2694,17 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(buf.String()).To(ContainSubstring("_grp pfx_grp"))
 	})
 
+	It("sanitizes completed keys and groups with custom prefixes containing spaces in GELF mode", func() {
+		buf.Reset()
+		hPrefSpace := logger.NewHandlerWithFormat(buf, nil, `%attr(%"app prefix"_qk=%v )%grp(%attr(%"grp prefix"_qg=%v%nl( )))`+"\n")
+		rPref := slog.Record{Time: testTime, Message: "prefix space test"}
+		rPref.Add(slog.String("my key", "val1"))
+		rPref.Add(slog.Group("my grp", slog.String("inner key", "val2")))
+		Expect(hPrefSpace.Handle(context.Background(), rPref)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"app_x20prefix_my_x20key"=val1`))
+		Expect(buf.String()).To(ContainSubstring(`"grp_x20prefix_my_x20grp_inner_x20key"=val2`))
+	})
+
 	It("handles nil pointer panics in appendFormattedValue with quoting", func() {
 		b := logger.NewBuffer()
 		var p *NilTextPanicker
@@ -2574,6 +2729,14 @@ type CustomJSONType struct {
 
 func (c CustomJSONType) MarshalJSON() ([]byte, error) {
 	return []byte(`{"custom":"` + c.Name + `"}`), nil
+}
+
+type TestLogValuer struct {
+	Val any
+}
+
+func (v TestLogValuer) LogValue() slog.Value {
+	return slog.AnyValue(v.Val)
 }
 
 type NilPointerPanicker struct{}
