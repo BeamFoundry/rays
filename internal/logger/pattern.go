@@ -1278,16 +1278,10 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 			return s
 		case slog.SourceKey:
 			if v.Any() == nil {
-				if quote {
-					return strNull
-				}
-				return strNilText
+				return formatValue(v, quote, ctx.isGELF)
 			}
 			if s, ok := v.Any().(*slog.Source); ok && s == nil {
-				if quote {
-					return strNull
-				}
-				return strNilText
+				return formatValue(v, quote, ctx.isGELF)
 			}
 			if v.Kind() == slog.KindString {
 				if quote {
@@ -1376,6 +1370,26 @@ func formatValue(v slog.Value, quote bool, isGELF ...bool) string {
 	return string(*buf)
 }
 
+// appendNilValue renders a nil value into the buffer using a GELF-aware format.
+// As an exception for the GELF specification (where all additional fields must be strings or numbers),
+// nil values are encoded as a JSON string ("null") in GELF mode when quoted. Outside GELF,
+// nil is preserved as JSON null when quoted, or <nil> when unquoted in text/logfmt mode.
+//
+//nolint:revive // boolean flags control quoting and GELF mode
+func appendNilValue(buf *Buffer, quote, gelfMode bool) {
+	if quote {
+		if gelfMode {
+			appendJsonString(buf, strNull)
+		} else {
+			//nolint:errcheck // buffer write cannot fail
+			buf.WriteString(strNull)
+		}
+	} else {
+		//nolint:errcheck // buffer write cannot fail
+		buf.WriteString(strNilText)
+	}
+}
+
 // appendFormattedValue renders a structured value into the buffer in JSON or text format.
 //
 //nolint:revive // quote controls whether values like strings are quoted
@@ -1413,24 +1427,13 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 		appendString(buf, v.Time().String(), quote)
 	case slog.KindAny:
 		if v.Any() == nil {
-			if quote {
-				//nolint:errcheck // buffer write cannot fail
-				buf.WriteString(strNull)
-			} else {
-				//nolint:errcheck // buffer write cannot fail
-				buf.WriteString(strNilText)
-			}
+			appendNilValue(buf, quote, gelfMode)
 			return
 		}
 		defer func() {
 			if r := recover(); r != nil {
 				if val := reflect.ValueOf(v.Any()); val.Kind() == reflect.Pointer && val.IsNil() {
-					if quote {
-						//nolint:errcheck // buffer write cannot fail
-						buf.WriteString(strNull)
-					} else {
-						appendString(buf, strNilText, false)
-					}
+					appendNilValue(buf, quote, gelfMode)
 					return
 				}
 				appendString(buf, fmt.Sprintf("!PANIC: %v", r), true)
@@ -1447,12 +1450,7 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 			appendString(buf, string(data), quote)
 		case *slog.Source:
 			if cv == nil {
-				if quote {
-					//nolint:errcheck // buffer write cannot fail
-					buf.WriteString(strNull)
-				} else {
-					appendString(buf, strNilText, false)
-				}
+				appendNilValue(buf, quote, gelfMode)
 				return
 			}
 			if quote {
@@ -1463,12 +1461,7 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 		default:
 			val := reflect.ValueOf(cv)
 			if val.Kind() == reflect.Pointer && val.IsNil() {
-				if quote {
-					//nolint:errcheck // buffer write cannot fail
-					buf.WriteString(strNull)
-				} else {
-					appendString(buf, strNilText, false)
-				}
+				appendNilValue(buf, quote, gelfMode)
 				return
 			}
 			if quote {

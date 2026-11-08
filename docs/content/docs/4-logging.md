@@ -166,7 +166,7 @@ Rays features a compiled pattern layout engine. The format pattern string is par
   - **Quoting variations**:
     - `%k` and `%v`: Raw, unquoted values as-is.
     - `%qk`: Quoted counterpart for keys, always enclosed in double quotes (e.g. `"key"`), escaped for JSON or quoted logfmt.
-    - `%qv`: Quoted counterpart for values. Quoting depends on attribute type: strings, durations, and timestamp strings are enclosed in double quotes (`"value"`), while numbers (integers, floats) and booleans remain unquoted, `nil` renders as `null`, and structured values (maps, structs, slices) render as JSON objects or arrays (or JSON-encoded strings in GELF additional fields).
+    - `%qv`: Quoted counterpart for values. Quoting depends on attribute type: strings, durations, and timestamp strings are enclosed in double quotes (`"value"`), while numbers (integers, floats) and booleans remain unquoted, `nil` renders as `null` (or as a JSON string `"null"` in GELF additional fields, complying with the GELF requirement that additional fields be strings or numbers), and structured values (maps, structs, slices) render as JSON objects or arrays (or JSON-encoded strings in GELF additional fields).
     - `%ak` and `%av`: Automatic quoted counterparts. Values and keys are printed unquoted by default, but automatically quoted with double quotes if they contain spaces, equals signs (`=`), double quotes (`"`), control characters, or if empty. For `%av`, precision truncation truncates the underlying value before automatic quoting, and width modifiers apply padding outside the quoted string.
 
 - **Attribute Delimiter (`%nl`)**:
