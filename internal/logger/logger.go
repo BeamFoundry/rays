@@ -55,6 +55,7 @@ func (this *Logger) Clone() *Logger {
 	return logger
 }
 
+// applyHandlerSettings applies format, level, and color configurations to the target handler.
 func (this *Logger) applyHandlerSettings(handler slog.Handler) slog.Handler {
 	if this.formatSet {
 		if h, ok := handler.(interface{ SetFormat(string) }); ok {
@@ -77,6 +78,7 @@ func (this *Logger) applyHandlerSettings(handler slog.Handler) slog.Handler {
 	return handler
 }
 
+// getFramePointer captures the program counter of the calling stack frame skipping the requested depth.
 func (this *Logger) getFramePointer(skip int) uintptr {
 	pc := make([]uintptr, 32)
 	runtime.Callers(4+skip, pc)
@@ -88,6 +90,7 @@ func (this *Logger) SetDefault() {
 	slog.SetDefault(this.Logger)
 }
 
+// log constructs and handles a slog.Record at the given level with the caller's program counter.
 func (this *Logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
 	if this.Enabled(ctx, level) {
 		record := slog.Record{
@@ -236,6 +239,7 @@ func (this *Logger) GetHandlerOptions() *slog.HandlerOptions {
 	return this.options
 }
 
+// cloneOptions returns a copy of the logger's HandlerOptions.
 func (this *Logger) cloneOptions() *slog.HandlerOptions {
 	opts := *this.options
 	return &opts

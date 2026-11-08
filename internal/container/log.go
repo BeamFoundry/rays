@@ -13,6 +13,7 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
+// LogLevel defines the enumeration of supported logging severity levels.
 type LogLevel struct {
 	Enum[LogLevel]
 	INFO, // Default level
@@ -23,6 +24,7 @@ type LogLevel struct {
 	FATAL Enum[LogLevel]
 }
 
+// Level converts the LogLevel enumeration into the corresponding slog.Level value.
 func (this *LogLevel) Level() slog.Level {
 	switch this.Enum {
 	case LogLevel{}.New().TRACE:
@@ -40,6 +42,7 @@ func (this *LogLevel) Level() slog.Level {
 	}
 }
 
+// LogHandler defines the enumeration of supported logging handler implementations.
 type LogHandler struct {
 	Enum[LogHandler]
 	DEFAULT,
@@ -51,6 +54,7 @@ type LogHandler struct {
 	LOGSTASH Enum[LogHandler]
 }
 
+// Handler returns a factory function that constructs the slog.Handler corresponding to this LogHandler option.
 func (this *LogHandler) Handler(format ...string) func(io.Writer, *slog.HandlerOptions) slog.Handler {
 	customFormat := logger.DefaultFormat
 	if len(format) > 0 && format[0] != "" {
@@ -90,6 +94,7 @@ func (this *LogHandler) Handler(format ...string) func(io.Writer, *slog.HandlerO
 	}
 }
 
+// LogColor defines the enumeration of terminal ANSI color output options (AUTO, ON, OFF).
 type LogColor struct {
 	Enum[LogColor]
 	AUTO,
@@ -97,6 +102,7 @@ type LogColor struct {
 	OFF Enum[LogColor]
 }
 
+// Apply configures the ANSI color output mode on the given logger based on the LogColor setting.
 func (this LogColor) Apply(lg *logger.Logger) {
 	switch this.Enum {
 	case LogColor{}.New().ON:
@@ -108,6 +114,7 @@ func (this LogColor) Apply(lg *logger.Logger) {
 	}
 }
 
+// LoggingProperties holds configuration properties under the "rays.logging" namespace.
 type LoggingProperties struct {
 	ConfigurationProperties `Name:"rays.logging"`
 	// Loggers
@@ -127,48 +134,59 @@ type LoggingProperties struct {
 	source bool
 }
 
+// LogLevel returns the configured logging severity level.
 func (this *LoggingProperties) LogLevel() LogLevel {
 	return this.level
 }
 
+// LogHandler returns the configured log handler type.
 func (this *LoggingProperties) LogHandler() LogHandler {
 	return this.handler
 }
 
+// LogColor returns the configured ANSI color output mode.
 func (this *LoggingProperties) LogColor() LogColor {
 	return this.color
 }
 
+// Color returns the configured ANSI color output mode, mirroring LogColor.
 func (this *LoggingProperties) Color() LogColor {
 	return this.color
 }
 
+// AddSource reports whether caller source file and line information should be added to records.
 func (this *LoggingProperties) AddSource() bool {
 	return this.source
 }
 
+// Format returns the pattern format string configured for custom log handlers.
 func (this *LoggingProperties) Format() string {
 	return this.format
 }
 
+// MapLevels returns the mapping of package paths or logger names to their configured log levels.
 func (this *LoggingProperties) MapLevels() map[string]LogLevel {
 	return this.loggers
 }
 
+// logging wraps a logger.Logger instance to implement the core.Logging interface.
 type logging struct {
 	*logger.Logger
 }
 
+// With returns a new Logging instance with the provided key-value attributes appended.
 func (this logging) With(args ...any) Logging {
 	this.Logger = this.Logger.With(args...)
 	return &this
 }
 
+// WithGroup returns a new Logging instance that qualifies subsequent attributes with the specified group name.
 func (this logging) WithGroup(name string) Logging {
 	this.Logger = this.Logger.WithGroup(name)
 	return &this
 }
 
+// LoggingConfiguration is a Stereotype configuration bean that manages logger initialization and injection.
 type LoggingConfiguration struct {
 	Configuration
 	properties *LoggingProperties `@:"Inject"`
@@ -177,6 +195,7 @@ type LoggingConfiguration struct {
 
 var _, _ = any(&LoggingConfiguration{}).(Stereotype)
 
+// PostConstruct initializes the global logger format and color according to loaded logging properties.
 func (this *LoggingConfiguration) PostConstruct() Error {
 	this.loggers = slices.Sorted(maps.Keys(this.properties.MapLevels()))
 	slices.Reverse(this.loggers)
@@ -188,6 +207,8 @@ func (this *LoggingConfiguration) PostConstruct() Error {
 	return nil
 }
 
+// Logger returns a contextual Logging instance tailored to the injecting bean's package and type.
+//
 //nolint:contextcheck //TODO: I should remove this check.
 func (this *LoggingConfiguration) Logger(ctx context.Context) Logging {
 	if ct := ctx.Value(PrototypeContextParentType); ct != nil {
@@ -214,6 +235,7 @@ func (this *LoggingConfiguration) Logger(ctx context.Context) Logging {
 	return &logging{logger.GetLogger()}
 }
 
+// init registers default logging properties into the container.
 func init() {
 	loggingProperties := map[string]any{
 		"handler": LogHandler{}.New().DEFAULT.String(),

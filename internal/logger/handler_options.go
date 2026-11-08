@@ -24,6 +24,8 @@ const (
 
 var handlerOptions = defaultHandlerOptions()
 
+// defaultHandlerOptions returns the default HandlerOptions configured with source recording,
+// default log levels, and custom attribute replacement for time, level, and source.
 func defaultHandlerOptions() *slog.HandlerOptions {
 	return &slog.HandlerOptions{
 		AddSource: true,

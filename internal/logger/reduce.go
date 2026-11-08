@@ -62,6 +62,7 @@ func ReduceFunctionName(function string) string {
 	return ret
 }
 
+// init populates moduleCache with main module and dependency package paths from build info.
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		moduleCache[info.Main.Path] = reducePkgElements(strings.Split(info.Main.Path, "/"))
