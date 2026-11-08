@@ -118,10 +118,10 @@ Rays provides several pre-configured log handlers covering local development, st
 | Handler | Description | Underlying Pattern |
 | :--- | :--- | :--- |
 | `DEFAULT` | Human-readable console format with ANSI colors and styles | `%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}` |
-| `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%v) %source(%ak=%v )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %ag.%ak=%qv))` |
+| `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %agk=%qv))` |
 | `JSON` | Compact, standard JSON log output | `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
-| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1","host":"localhost",%time("timestamp":%"UnixMilli"v,)%level("level":%qv),%msg("short_message":%qv)%source(,"_source":%qv)%attr(,"_%k":%qv)%grp(,"_%g":{%attr(%qk:%qv%nl(,))})}` |
+| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%q_k:%qv)%grp(%attr(,%q_gk:%qv))}` |
 | `LOGSTASH` | Logstash JSON event format | `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `CUSTOM` | Custom format defined by the `format` configuration property | Defined via `format:` |
 
@@ -136,13 +136,22 @@ Rays features a compiled pattern layout engine. The format pattern string is par
 | Placeholder | Description | Inner Value Targets |
 | :--- | :--- | :--- |
 | `%time(...)` | Renders the log record timestamp | Generic placeholders `%v`, `%qv`, `%av`, or custom layout `%"<layout>"v`, `%"<layout>"qv`, `%"<layout>"av` |
-| `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv`, `%av` |
+| `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv`, `%av`, or syslog severity `%"syslog"v` |
 | `%source(...)` | Renders the reduced source file and line (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%av`, `%k=%v` |
 | `%msg(...)` | Renders the log message | Generic placeholders `%v`, `%qv`, `%av`, `%k=%qv` |
+| `%host(...)` | Renders the machine hostname (cached) | Generic placeholders `%v`, `%qv`, `%av`, `host=%qv` |
 | `%attr(...)` | Iterates over top-level structured attributes | Generic placeholders `%k`, `%qk`, `%ak`, `%v`, `%qv`, `%av` and delimiter `%nl(...)` |
-| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, `%ag`, nested `%attr(...)` |
+| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, `%ag`, dotted `%gk`, `%qgk`, `%agk`, nested `%attr(...)` |
 | `%nl(...)` | Renders its contents only if the current item is **not the last** | Static delimiter (e.g. `%nl(,)` or `%nl( )`), used inside `%attr(...)` |
 | `%clr(...)` | Wraps inner content in ANSI color and mode escape sequences | See [ANSI Styling](#ansi-styling) below |
+
+**Short Aliases & Escape Sequences**:
+- `%t(...)`: Alias for `%time(...)`
+- `%l(...)`: Alias for `%level(...)`
+- `%m(...)`: Alias for `%msg(...)`
+- `%s(...)`: Alias for `%source(...)`
+- `%h(...)`: Alias for `%host(...)`
+- `%%`: Escapes a literal percent sign (`%`)
 
 ### Generic Placeholders & Specifiers
 
@@ -150,23 +159,36 @@ Rays features a compiled pattern layout engine. The format pattern string is par
   These generic placeholders apply across field placeholders and structured attributes:
   - In `%time(...)`: `%k` represents `"time"`, and `%v` represents the formatted timestamp value.
   - In `%level(...)`: `%k` represents `"level"`, and `%v` represents the level name (e.g. `INFO`).
-  - In `%source(...)`: `%k` represents `"source"`, and `%v` represents the source file and line.
+  - In `%source(...)`: `%k` represents `"source"`, and `%v` represents the caller source information.
   - In `%msg(...)`: `%k` represents `"msg"`, and `%v` represents the log message.
+  - In `%host(...)`: `%k` represents `"host"`, and `%v` represents the system hostname.
   - In `%attr(...)`: `%k` represents the attribute key, and `%v` represents the attribute value.
   - **Quoting variations**:
     - `%k` and `%v`: Raw, unquoted values as-is.
-    - `%qk` and `%qv`: Quoted counterparts, always enclosed in double quotes (e.g. `"key"` and `"value"`), escaped for JSON or quoted logfmt.
-    - `%ak` and `%av`: Automatic quoted counterparts. Values and keys are printed unquoted by default, but automatically quoted with double quotes if they contain spaces, equals signs (`=`), double quotes (`"`), control characters, or if empty.
+    - `%qk`: Quoted counterpart for keys, always enclosed in double quotes (e.g. `"key"`), escaped for JSON or quoted logfmt.
+    - `%qv`: Quoted counterpart for values. Quoting depends on attribute type: strings, durations, and timestamp strings are enclosed in double quotes (`"value"`), while numbers (integers, floats) and booleans remain unquoted, `nil` renders as `null`, and structured values (maps, structs, slices) render as JSON objects or arrays.
+    - `%ak` and `%av`: Automatic quoted counterparts. Values and keys are printed unquoted by default, but automatically quoted with double quotes if they contain spaces, equals signs (`=`), double quotes (`"`), control characters, or if empty. For `%av`, precision truncation truncates the underlying value before automatic quoting, and width modifiers apply padding outside the quoted string.
 
 - **Attribute Delimiter (`%nl`)**:
   `%nl(...)` applies **only inside `%attr(...)`**. It outputs its enclosed content only if the current attribute is **not the last** item in the iteration, making it ideal for delimiters (such as `%nl(,)` or `%nl( )`).
 
 - **Group Specifiers (`%g`, `%qg`, `%ag`)**:
-  Apply **only inside `%grp(...)`** to render the group name:
+  Apply **inside `%grp(...)`** to render the group name:
   - `%g`: Raw unquoted group name.
   - `%qg`: Always quoted group name.
   - `%ag`: Automatic quoted group name (quoted only if containing spaces, equals signs, quotes, or control characters).
   Attributes within the group are iterated using a nested `%attr(...)`.
+
+- **Dotted Group Key Specifiers (`%gk`, `%qgk`, `%agk`)**:
+  Apply inside nested `%attr(...)` within `%grp(...)` to format the combined dotted group and attribute key (`group.key`):
+  - `%gk`: Raw unquoted dotted key (e.g. `metric.cpu`).
+  - `%qgk`: Always quoted dotted key (e.g. `"metric.cpu"`).
+  - `%agk`: Automatically quoted dotted key (e.g. `metric.cpu` remains unquoted, but `"system metrics.cpu usage"` is quoted as a single combined string if either part contains spaces or equals signs).
+
+- **Prefixed Key Specifiers**:
+  - `%q_k` and `%a_k`: Underscore-prefixed attribute keys (`_key`), used in formats like GELF.
+  - `%q_gk` and `%a_gk`: Underscore-prefixed group and attribute keys (`_group_key`), flattened with underscores.
+  - Custom key prefixes: A custom prefix can be specified in double quotes before the specifier, e.g. `%"app."ak`, `%"_"qk`, or `%"custom_"agk`.
 
 ### Padding and Truncation Modifiers
 
@@ -177,6 +199,31 @@ You can format placeholders with minimum widths, maximum widths, and alignment:
 - `%.10v`: Truncate to maximum 10 characters from the start (keeps trailing characters)
 - `%.-10v`: Truncate to maximum 10 characters from the end (keeps leading characters)
 - `%-5.10v`: Combined left-align minimum 5 characters, maximum 10 characters
+
+---
+
+## Level Formatting & Syslog Severity
+
+The `%level(...)` placeholder formats the log level name by default (`INFO`, `WARN`, `ERROR`, `FATAL`, `TRACE`). It supports padding and alignment modifiers (e.g. `%-5v`, `%5v`), generic keys (`%k`), unquoted and quoted values (`%v`, `%qv`, `%av`), and the dedicated `%"syslog"v` layout:
+
+- `%"syslog"v`: Formats the level as its numeric RFC 5424 syslog severity code:
+  - `FATAL`: `2` (Critical)
+  - `ERROR`: `3` (Error)
+  - `WARN`: `4` (Warning)
+  - `INFO`: `6` (Informational)
+  - `DEBUG` / `TRACE`: `7` (Debug)
+
+---
+
+## Source Formatting
+
+When `source: true` is configured, `%source(...)` extracts runtime caller information:
+
+- **Unquoted (`%v` or `%av`)**: Renders human-readable caller location with reduced package names, formatted as `function(file:line)` (e.g. `main.run(server.go:42)`).
+- **Quoted (`%qv`)**: Emits a structured JSON object containing the file name, line number, and function name:
+  ```json
+  {"file":{"name":"server.go","line":42},"function":"main.run"}
+  ```
 
 ---
 
@@ -203,7 +250,7 @@ Rays adds dedicated Unix epoch time layouts for high-precision and Unix-compatib
 | `"UnixMicro"` | Epoch time with microsecond decimal precision (seconds.microseconds) | `1700000000.123456` |
 | `"UnixNano"` | Epoch time with nanosecond decimal precision (seconds.nanoseconds) | `1700000000.123456789` |
 
-In addition to the Unix layouts above, all standard Go time format constants (such as `RFC3339`, `RFC3339Nano`, `DateTime`, `DateOnly`, `TimeOnly`, `ANSIC`, `UnixDate`, `RubyDate`, `RFC822`, `RFC822Z`, `RFC850`, `RFC1123`, `RFC1123Z`, `Kitchen`, `Stamp`, `StampMilli`, `StampMicro`, `StampNano`) are supported by name. Refer to the [Go time package constants table](https://pkg.go.dev/time#pkg-constants) for the complete list of standard format names.
+In addition to the Unix layouts above, all standard Go time format constants (such as `RFC3339`, `RFC3339Nano`, `DateTime`, `DateOnly`, `TimeOnly`, `ANSIC`, `UnixDate`, `RubyDate`, `RFC822`, `RFC822Z`, `RFC850`, `RFC1123`, `RFC1123Z`, `Kitchen`, `Stamp`, `StampMilli`, `StampMicro`, `StampNano`), ISO 8601 aliases (`iso8601`, `iso_8601`, `iso-8601`), and snake_case variants (e.g. `unix_milli`, `rfc3339_nano`, `date_time`, `date_only`, `time_only`, `unix_date`, `ruby_date`, `stamp_milli`, etc.) are supported case-insensitively by name. Refer to the [Go time package constants table](https://pkg.go.dev/time#pkg-constants) for the complete list of standard format names.
 
 ### Custom Go Time Layouts
 
@@ -240,21 +287,24 @@ Rays supports full ANSI styling with independent color and mode combinations.
 | `faint` | `2` | Faint or decreased intensity |
 | `italic` | `3` | Italicized text |
 | `underline` | `4` | Underlined text |
-| `blinky` | `5` | Blinking text |
+| `blinky` / `blink` | `5` | Blinking text |
 
 ### Supported Colors
 
-| Color Name | Foreground Code |
-| :--- | :--- |
-| `black` | `30` |
-| `red` | `31` |
-| `green` | `32` |
-| `yellow` | `33` |
-| `blue` | `34` |
-| `magenta` | `35` |
-| `cyan` | `36` |
-| `white` | `37` |
-| `default` | `39` |
+| Color Name | Foreground Code | Color Name | Foreground Code |
+| :--- | :--- | :--- | :--- |
+| `black` | `30` | `bright_black` | `90` |
+| `red` | `31` | `bright_red` | `91` |
+| `green` | `32` | `bright_green` | `92` |
+| `yellow` | `33` | `bright_yellow` | `93` |
+| `blue` | `34` | `bright_blue` | `94` |
+| `magenta` | `35` | `bright_magenta` | `95` |
+| `cyan` | `36` | `bright_cyan` | `96` |
+| `white` | `37` | `bright_white` | `97` |
+| `default` | `39` | | |
+
+> [!NOTE]
+> Bright color names can be specified with either underscores or hyphens (e.g. `bright_black` or `bright-black`, `bright_cyan` or `bright-cyan`).
 
 ### Mode and Color Combinations
 

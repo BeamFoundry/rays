@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -942,15 +943,39 @@ var _ = Describe("PatternHandler", func() {
 		Expect(lg.IsColor()).To(BeTrue())
 
 		// On Logger with terminal output, isolated from ambient environment
-		origNoColor := os.Getenv("NO_COLOR")
-		origTerm := os.Getenv("TERM")
-		origColorTerm := os.Getenv("COLORTERM")
+		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
+		origTerm, hasTerm := os.LookupEnv("TERM")
+		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
+		origArgs := os.Args
 		//nolint:errcheck // restoring environment in test cleanup
 		defer func() {
-			os.Setenv("NO_COLOR", origNoColor)
-			os.Setenv("TERM", origTerm)
-			os.Setenv("COLORTERM", origColorTerm)
+			if hasNoColor {
+				os.Setenv("NO_COLOR", origNoColor)
+			} else {
+				os.Unsetenv("NO_COLOR")
+			}
+			if hasTerm {
+				os.Setenv("TERM", origTerm)
+			} else {
+				os.Unsetenv("TERM")
+			}
+			if hasColorTerm {
+				os.Setenv("COLORTERM", origColorTerm)
+			} else {
+				os.Unsetenv("COLORTERM")
+			}
+			os.Args = origArgs
 		}()
+
+		var filteredArgs []string
+		for _, arg := range os.Args {
+			trimmed := strings.TrimLeft(arg, "-")
+			if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
+				!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
+				filteredArgs = append(filteredArgs, arg)
+			}
+		}
+		os.Args = filteredArgs
 
 		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
 		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
@@ -2033,6 +2058,130 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(hNoGrpAGK.Handle(context.Background(), rAGK2)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("_item=1"))
 		Expect(buf.String()).To(ContainSubstring(`"_spaced item"=2`))
+	})
+
+	It("formats grouped keys with %agk, %qgk, and %gk", func() {
+		testTime := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+		// %agk in group
+		buf.Reset()
+		hAGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%agk=%v%nl( )))`)
+		hG := hAGK.WithGroup("my group")
+		r := slog.Record{Time: testTime, Message: "test"}
+		r.Add(slog.String("plain", "1"), slog.String("has space", "2"))
+		Expect(hG.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"my group.plain"=1`))
+		Expect(buf.String()).To(ContainSubstring(`"my group.has space"=2`))
+
+		// %agk without group spaces
+		buf.Reset()
+		hG2 := hAGK.WithGroup("grp")
+		Expect(hG2.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("grp.plain=1"))
+		Expect(buf.String()).To(ContainSubstring(`"grp.has space"=2`))
+
+		// %agk without group at top level
+		buf.Reset()
+		hTopAGK := logger.NewHandlerWithFormat(buf, nil, `%attr(%"pfx."agk=%v%nl( ))`)
+		rTop := slog.Record{Time: testTime, Message: "test"}
+		rTop.Add(slog.String("item", "1"), slog.String("spaced item", "2"))
+		Expect(hTopAGK.Handle(context.Background(), rTop)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx.item=1"))
+		Expect(buf.String()).To(ContainSubstring(`"pfx.spaced item"=2`))
+
+		// %qgk always quotes
+		buf.Reset()
+		hQGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx."qgk=%v%nl( )))`)
+		hGQGK := hQGK.WithGroup("grp")
+		Expect(hGQGK.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"pfx.grp.plain"=1`))
+		Expect(buf.String()).To(ContainSubstring(`"pfx.grp.has space"=2`))
+
+		// %gk raw unquoted
+		buf.Reset()
+		hGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx."gk=%v%nl( )))`)
+		hGGK := hGK.WithGroup("grp")
+		Expect(hGGK.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx.grp.plain=1"))
+		Expect(buf.String()).To(ContainSubstring("pfx.grp.has space=2"))
+	})
+
+	It("applies precision truncation before quoting and width padding outside quotes for %av", func() {
+		testTime := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+		// %.-5av truncates from end: "hello world" -> keeps leading 5 "hello" (no space, unquoted)
+		buf.Reset()
+		h1 := logger.NewHandlerWithFormat(buf, nil, `%attr(%.-5av%nl( ))`)
+		r1 := slog.Record{Time: testTime, Message: "test"}
+		r1.Add(slog.String("k", "hello world"))
+		Expect(h1.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("hello\n"))
+
+		// %.-7av truncates from end: "hello world" -> keeps leading 7 "hello w" (has space, quoted as "\"hello w\"")
+		buf.Reset()
+		h2 := logger.NewHandlerWithFormat(buf, nil, `%attr(%.-7av%nl( ))`)
+		Expect(h2.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"hello w\"\n"))
+
+		// %.5av truncates from start: "hello world" -> keeps trailing 5 "world" (no space, unquoted)
+		buf.Reset()
+		h3 := logger.NewHandlerWithFormat(buf, nil, `%attr(%.5av%nl( ))`)
+		Expect(h3.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("world\n"))
+
+		// %.7av truncates from start: "hello world" -> keeps trailing 7 "o world" (has space, quoted as "\"o world\"")
+		buf.Reset()
+		h3b := logger.NewHandlerWithFormat(buf, nil, `%attr(%.7av%nl( ))`)
+		Expect(h3b.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("\"o world\"\n"))
+
+		// %-10.-7av truncates to "hello w", quotes to "\"hello w\"" (len 9), pads to width 10 left-aligned
+		buf.Reset()
+		h4 := logger.NewHandlerWithFormat(buf, nil, `[%attr(%-10.-7av)]`)
+		Expect(h4.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("[\"hello w\" ]\n"))
+
+		// %10.-7av pads to width 10 right-aligned outside the quotes
+		buf.Reset()
+		h5 := logger.NewHandlerWithFormat(buf, nil, `[%attr(%10.-7av)]`)
+		Expect(h5.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("[ \"hello w\"]\n"))
+
+		// %-10.-5av unquoted value padded to width 10 left-aligned
+		buf.Reset()
+		h6 := logger.NewHandlerWithFormat(buf, nil, `[%attr(%-10.-5av)]`)
+		Expect(h6.Handle(context.Background(), r1)).To(Succeed())
+		Expect(buf.String()).To(Equal("[hello     ]\n"))
+	})
+
+	It("formats TextFormat with quoted whitespace levels, sources, and single-quoted grouped keys", func() {
+		optsWS := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.LevelKey {
+					return slog.String(slog.LevelKey, "CUSTOM LEVEL")
+				}
+				if a.Key == slog.SourceKey {
+					return slog.String(slog.SourceKey, "my dir/main.go:42")
+				}
+				return a
+			},
+		}
+		hWS := logger.NewHandlerWithFormat(buf, optsWS, logger.TextFormat)
+		hWS.SetColor(false)
+		t := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+		r := slog.Record{
+			Time:    t,
+			Message: "test msg",
+			Level:   slog.LevelInfo,
+			PC:      getFramePointer(),
+		}
+		r.Add(slog.Group("my group", slog.String("sub key", "value")))
+		Expect(hWS.Handle(context.Background(), r)).To(Succeed())
+		out := buf.String()
+		Expect(out).To(ContainSubstring(`level="CUSTOM LEVEL"`))
+		Expect(out).To(ContainSubstring(`source="my dir/main.go:42"`))
+		Expect(out).To(ContainSubstring(`"my group.sub key"="value"`))
 	})
 
 	It("covers needsQuoting branches", func() {
