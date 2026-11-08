@@ -1068,15 +1068,40 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 
 		termBuf := &fakeTerminalWriter{Buffer: bytes.NewBuffer(nil)}
 		lg.SetOutput(termBuf)
-		origNoColor := os.Getenv("NO_COLOR")
-		origTerm := os.Getenv("TERM")
-		origColorTerm := os.Getenv("COLORTERM")
+		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
+		origTerm, hasTerm := os.LookupEnv("TERM")
+		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
+		origArgs := os.Args
 		//nolint:errcheck // restoring environment in test cleanup
 		defer func() {
-			os.Setenv("NO_COLOR", origNoColor)
-			os.Setenv("TERM", origTerm)
-			os.Setenv("COLORTERM", origColorTerm)
+			if hasNoColor {
+				os.Setenv("NO_COLOR", origNoColor)
+			} else {
+				os.Unsetenv("NO_COLOR")
+			}
+			if hasTerm {
+				os.Setenv("TERM", origTerm)
+			} else {
+				os.Unsetenv("TERM")
+			}
+			if hasColorTerm {
+				os.Setenv("COLORTERM", origColorTerm)
+			} else {
+				os.Unsetenv("COLORTERM")
+			}
+			os.Args = origArgs
 		}()
+
+		var filteredArgs []string
+		for _, arg := range os.Args {
+			trimmed := strings.TrimLeft(arg, "-")
+			if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
+				!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
+				filteredArgs = append(filteredArgs, arg)
+			}
+		}
+		os.Args = filteredArgs
+
 		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
 		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
 		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
@@ -2348,6 +2373,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		r.Add(slog.String("user_id", "top_user_val"))
 		r.Add(slog.String("user.id", "top_user_dot_val"))
 		r.Add(slog.String("user_x2eid", "top_user_escape_val"))
+		r.Add(slog.String("user_x2Eid", "top_user_upper_escape_val"))
 		r.Add(slog.Group("user", slog.String("id", "grouped_user_val")))
 		r.Add(slog.Group("user.profile", slog.String("id", "literal_dot_grp_val")))
 		r.Add(slog.Group("user_x2eprofile", slog.String("id", "literal_escape_grp_val")))
@@ -2360,6 +2386,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(js["_user_id"]).To(Equal("top_user_val"))
 		Expect(js["_user_x2eid"]).To(Equal("top_user_dot_val"))
 		Expect(js["_user_x5fx2eid"]).To(Equal("top_user_escape_val"))
+		Expect(js["_user_x5fx2Eid"]).To(Equal("top_user_upper_escape_val"))
 		Expect(js["_user.id"]).To(Equal("grouped_user_val"))
 		Expect(js["_user_x2eprofile.id"]).To(Equal("literal_dot_grp_val"))
 		Expect(js["_user_x5fx2eprofile.id"]).To(Equal("literal_escape_grp_val"))
@@ -2395,6 +2422,10 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(logger.ReduceFunctionName("")).To(Equal(""))
 		Expect(logger.ReduceFunctionName("pkg.(*")).To(Equal("pkg.(*"))
 		Expect(logger.ReduceFunctionName("pkg.(*foo")).To(Equal("pkg.(*foo"))
+		Expect(logger.ReduceFunctionName(".")).To(Equal("."))
+
+		// Repeated calls verify retrieval from functionCache for malformed entries
+		Expect(logger.ReduceFunctionName("pkg.(*")).To(Equal("pkg.(*"))
 		Expect(logger.ReduceFunctionName(".")).To(Equal("."))
 
 		// Text rendering of record with malformed function name

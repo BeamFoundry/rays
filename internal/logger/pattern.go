@@ -729,6 +729,9 @@ func isHexDigit(c byte) bool {
 }
 
 // hasLiteralGELFEscape reports whether the string at index i begins a literal GELF escape sequence (_xHH).
+// Escape-like sequences in valid keys are escaped too (by escaping the leading underscore to _x5f)
+// to prevent collisions with encoded characters; for example, an attribute key user_x2Eid is emitted
+// as _user_x5fx2Eid so consumers can query it.
 func hasLiteralGELFEscape(s string, i int) bool {
 	return s[i] == '_' && i+3 < len(s) && s[i+1] == 'x' && isHexDigit(s[i+2]) && isHexDigit(s[i+3])
 }
@@ -739,6 +742,8 @@ func isGELFKeyChar(c byte) bool {
 }
 
 // encodeGELFKey encodes characters invalid in GELF field names into non-colliding hex escape sequences.
+// Escape-like sequences in valid keys are escaped too; for example, an attribute key user_x2Eid is emitted
+// as _user_x5fx2Eid so consumers can query it.
 func encodeGELFKey(s string) string {
 	needsEncoding := false
 	for i := 0; i < len(s); i++ {
