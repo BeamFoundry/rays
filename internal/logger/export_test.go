@@ -24,4 +24,12 @@ var (
 	NewRenderContext     = func() *renderContext {
 		return &renderContext{rep: func(_ []string, a slog.Attr) slog.Attr { return a }}
 	}
+	FormatSourceHelper = func(timeFormat string, attr slog.Attr, pc uintptr) string {
+		node := &ValueFormatNode{timeFormat: timeFormat}
+		ctx := &renderContext{
+			currentAttr: attr,
+			record:      slog.Record{PC: pc},
+		}
+		return node.formatSource(ctx)
+	}
 )
