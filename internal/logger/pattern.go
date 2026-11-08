@@ -538,13 +538,6 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 			prefix = encodeGELFKey(prefix)
 		}
 		attrKey = encodeGELFKey(attrKey)
-		if groupName != "" {
-			parts := strings.Split(groupName, ".")
-			for i, p := range parts {
-				parts[i] = encodeGELFKey(p)
-			}
-			groupName = strings.Join(parts, ".")
-		}
 	}
 
 	var name string
@@ -730,6 +723,16 @@ func (n *ValueFormatNode) formatSource(ctx *renderContext) string {
 	return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 }
 
+// isHexDigit reports whether a byte is a valid hexadecimal character.
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// hasLiteralGELFEscape reports whether the string at index i begins a literal GELF escape sequence (_xHH).
+func hasLiteralGELFEscape(s string, i int) bool {
+	return s[i] == '_' && i+3 < len(s) && s[i+1] == 'x' && isHexDigit(s[i+2]) && isHexDigit(s[i+3])
+}
+
 // isGELFKeyChar reports whether a character is valid in GELF field names ([a-zA-Z0-9_-]).
 func isGELFKeyChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
@@ -737,20 +740,24 @@ func isGELFKeyChar(c byte) bool {
 
 // encodeGELFKey encodes characters invalid in GELF field names into non-colliding hex escape sequences.
 func encodeGELFKey(s string) string {
-	hasInvalid := false
+	needsEncoding := false
 	for i := 0; i < len(s); i++ {
-		if !isGELFKeyChar(s[i]) {
-			hasInvalid = true
+		if !isGELFKeyChar(s[i]) || hasLiteralGELFEscape(s, i) {
+			needsEncoding = true
 			break
 		}
 	}
-	if !hasInvalid {
+	if !needsEncoding {
 		return s
 	}
 	const hexDigits = "0123456789abcdef"
 	buf := make([]byte, 0, len(s)+8)
 	for i := 0; i < len(s); i++ {
 		c := s[i]
+		if hasLiteralGELFEscape(s, i) {
+			buf = append(buf, '_', 'x', '5', 'f')
+			continue
+		}
 		if isGELFKeyChar(c) {
 			buf = append(buf, c)
 		} else {

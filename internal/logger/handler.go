@@ -184,7 +184,7 @@ func (this *Handler) Handle(_ context.Context, r slog.Record) error {
 	}
 
 	mode := groupModeText
-	if isGELF {
+	if isGELF || strings.Contains(format, "_qg") || strings.Contains(format, "_.qg") {
 		mode = groupModeGELF
 	} else if isJson {
 		mode = groupModeJSON

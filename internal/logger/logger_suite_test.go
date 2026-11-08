@@ -1790,9 +1790,17 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 
 		// In GELF mode without group directive
 		buf.Reset()
-		hGELFNoGrp := logger.NewHandlerWithFormat(buf, nil, `{"version":"1.1",%attr(%_qg=%v)}`+"\n")
-		Expect(hGELFNoGrp.Handle(context.Background(), r)).To(Succeed())
+		hGELFNoGrp := logger.NewHandlerWithFormat(buf, nil, `{"version":"1.1",%attr(%_qg=%v%nl( ))}`+"\n")
+		rGELF := slog.Record{Message: "no grp directive gelf"}
+		rGELF.Add(
+			slog.Group("env", slog.String("mode", "prod")),
+			slog.String("env.prod", "literal_val"),
+			slog.Group("env", slog.Group("prod", slog.String("setting", "nested_val"))),
+		)
+		Expect(hGELFNoGrp.Handle(context.Background(), rGELF)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring(`"_env_mode"=prod`))
+		Expect(buf.String()).To(ContainSubstring(`"_env_x2eprod"=literal_val`))
+		Expect(buf.String()).To(ContainSubstring(`"_env.prod_setting"=nested_val`))
 	})
 
 	It("renders deep nested groups and multiple child groups in JSON format", func() {
@@ -2339,18 +2347,24 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		r := slog.Record{Time: testTime, Message: "collision check"}
 		r.Add(slog.String("user_id", "top_user_val"))
 		r.Add(slog.String("user.id", "top_user_dot_val"))
+		r.Add(slog.String("user_x2eid", "top_user_escape_val"))
 		r.Add(slog.Group("user", slog.String("id", "grouped_user_val")))
 		r.Add(slog.Group("user.profile", slog.String("id", "literal_dot_grp_val")))
+		r.Add(slog.Group("user_x2eprofile", slog.String("id", "literal_escape_grp_val")))
 		r.Add(slog.Group("user", slog.Group("profile", slog.String("id", "nested_grp_val"))))
+		r.Add(slog.Group("user", slog.String("x2eid", "attr_escape_val")))
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
 		Expect(js["_user_id"]).To(Equal("top_user_val"))
 		Expect(js["_user_x2eid"]).To(Equal("top_user_dot_val"))
+		Expect(js["_user_x5fx2eid"]).To(Equal("top_user_escape_val"))
 		Expect(js["_user.id"]).To(Equal("grouped_user_val"))
 		Expect(js["_user_x2eprofile.id"]).To(Equal("literal_dot_grp_val"))
+		Expect(js["_user_x5fx2eprofile.id"]).To(Equal("literal_escape_grp_val"))
 		Expect(js["_user.profile.id"]).To(Equal("nested_grp_val"))
+		Expect(js["_user.x2eid"]).To(Equal("attr_escape_val"))
 	})
 
 	It("JSON-encodes maps, structs, and slices as strings in GELFFormat additional fields", func() {
@@ -2376,9 +2390,32 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(js["_score"]).To(BeNumerically("~", 98.5, 0.001))
 	})
 
-	It("returns dotless function name unchanged in ReduceFunctionName without panicking", func() {
+	It("returns dotless or malformed function name unchanged in ReduceFunctionName without panicking", func() {
 		Expect(logger.ReduceFunctionName("dotlessFunc")).To(Equal("dotlessFunc"))
 		Expect(logger.ReduceFunctionName("")).To(Equal(""))
+		Expect(logger.ReduceFunctionName("pkg.(*")).To(Equal("pkg.(*"))
+		Expect(logger.ReduceFunctionName("pkg.(*foo")).To(Equal("pkg.(*foo"))
+		Expect(logger.ReduceFunctionName(".")).To(Equal("."))
+
+		// Text rendering of record with malformed function name
+		buf.Reset()
+		optsMalformedSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, &slog.Source{
+						Function: "pkg.(*",
+						File:     "server.go",
+						Line:     42,
+					})
+				}
+				return a
+			},
+		}
+		hText := logger.NewHandlerWithFormat(buf, optsMalformedSrc, logger.TextFormat)
+		r := slog.Record{Time: testTime, Message: "malformed func", PC: getFramePointer()}
+		Expect(hText.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pkg.(*(server.go:42)"))
 	})
 
 	It("handles typed-nil *slog.Source in source formatting paths", func() {
@@ -2635,7 +2672,9 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(hFallbackJSON.Handle(context.Background(), rWithPC)).To(Succeed())
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
-		Expect(js["source"]).To(BeNil())
+		val, exists := js["source"]
+		Expect(exists).To(BeTrue())
+		Expect(val).To(BeNil())
 
 		// ReplaceAttr replacement of slog.SourceKey with nil preserves <nil> in unquoted custom layout
 		buf.Reset()
