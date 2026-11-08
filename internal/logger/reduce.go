@@ -45,7 +45,6 @@ func ReduceFunctionName(function string) string {
 	base := filepath.Base(function)
 	comp := strings.SplitN(base, ".", 3)
 	if len(comp) < 2 || comp[0] == "" || comp[1] == "" {
-		functionCache[function] = function
 		return function
 	}
 	pkg := dir + "/" + comp[0]
@@ -61,8 +60,7 @@ func ReduceFunctionName(function string) string {
 	}
 
 	if strings.HasPrefix(obj, "(*") {
-		if len(obj) < 3 || !strings.HasSuffix(obj, ")") {
-			functionCache[function] = function
+		if len(obj) < 4 || !strings.HasSuffix(obj, ")") {
 			return function
 		}
 		obj = obj[2 : len(obj)-1]

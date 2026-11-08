@@ -2422,11 +2422,26 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(logger.ReduceFunctionName("")).To(Equal(""))
 		Expect(logger.ReduceFunctionName("pkg.(*")).To(Equal("pkg.(*"))
 		Expect(logger.ReduceFunctionName("pkg.(*foo")).To(Equal("pkg.(*foo"))
+		Expect(logger.ReduceFunctionName("pkg.(*)")).To(Equal("pkg.(*)"))
 		Expect(logger.ReduceFunctionName(".")).To(Equal("."))
+		Expect(logger.ReduceFunctionName(".foo")).To(Equal(".foo"))
+		Expect(logger.ReduceFunctionName("foo.")).To(Equal("foo."))
 
-		// Repeated calls verify retrieval from functionCache for malformed entries
-		Expect(logger.ReduceFunctionName("pkg.(*")).To(Equal("pkg.(*"))
-		Expect(logger.ReduceFunctionName(".")).To(Equal("."))
+		// Verify malformed inputs are not stored in functionCache
+		_, okDot := logger.GetFunctionCacheEntry(".")
+		Expect(okDot).To(BeFalse())
+		_, okStar := logger.GetFunctionCacheEntry("pkg.(*")
+		Expect(okStar).To(BeFalse())
+		_, okEmptyRecv := logger.GetFunctionCacheEntry("pkg.(*)")
+		Expect(okEmptyRecv).To(BeFalse())
+
+		// Verify valid function name is stored in functionCache and retrieved on subsequent calls
+		validFn := "github.com/BeamFoundry/rays/pkg/internal/testpkg.MyFunc"
+		reduced := logger.ReduceFunctionName(validFn)
+		cachedVal, okValid := logger.GetFunctionCacheEntry(validFn)
+		Expect(okValid).To(BeTrue())
+		Expect(cachedVal).To(Equal(reduced))
+		Expect(logger.ReduceFunctionName(validFn)).To(Equal(reduced))
 
 		// Text rendering of record with malformed function name
 		buf.Reset()
@@ -2447,6 +2462,25 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		r := slog.Record{Time: testTime, Message: "malformed func", PC: getFramePointer()}
 		Expect(hText.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pkg.(*(server.go:42)"))
+
+		// Text rendering of record with empty pointer receiver preserves original function name
+		buf.Reset()
+		optsEmptyRecvSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, &slog.Source{
+						Function: "pkg.(*)",
+						File:     "server.go",
+						Line:     42,
+					})
+				}
+				return a
+			},
+		}
+		hTextEmpty := logger.NewHandlerWithFormat(buf, optsEmptyRecvSrc, logger.TextFormat)
+		Expect(hTextEmpty.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pkg.(*)(server.go:42)"))
 	})
 
 	It("handles typed-nil *slog.Source in source formatting paths", func() {
