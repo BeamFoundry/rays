@@ -28,6 +28,10 @@ func reducePkgElements(elems []string) string {
 	return s + elems[len(elems)-1]
 }
 
+const defaultMaxFunctionCacheSize = 1000
+
+var maxFunctionCacheSize = defaultMaxFunctionCacheSize
+
 // ReduceFunctionName reduces a fully qualified function name for concise log source reporting.
 func ReduceFunctionName(function string) string {
 	if !strings.Contains(function, ".") {
@@ -43,7 +47,21 @@ func ReduceFunctionName(function string) string {
 
 	dir := filepath.Dir(function)
 	base := filepath.Base(function)
-	comp := strings.SplitN(base, ".", 3)
+
+	var comp []string
+	if idx := strings.Index(base, ".(*"); idx != -1 {
+		if end := strings.Index(base[idx+1:], ")"); end != -1 {
+			end += idx + 1
+			pkgPart := base[:idx]
+			recv := base[idx+1 : end+1]
+			method := strings.TrimPrefix(base[end+1:], ".")
+			comp = []string{pkgPart, recv, method}
+		}
+	}
+	if len(comp) == 0 {
+		comp = strings.SplitN(base, ".", 3)
+	}
+
 	if len(comp) < 2 || comp[0] == "" || comp[1] == "" {
 		return function
 	}
@@ -57,7 +75,10 @@ func ReduceFunctionName(function string) string {
 	}
 	obj = strings.Replace(obj, "[...]", "", 1)
 
-	pkg := dir + "/" + comp[0]
+	pkg := comp[0]
+	if dir != "." {
+		pkg = dir + "/" + comp[0]
+	}
 	for k, v := range moduleCache {
 		if k == pkg {
 			pkg = v
@@ -69,7 +90,9 @@ func ReduceFunctionName(function string) string {
 	}
 
 	ret := pkg + "." + obj
-	functionCache[function] = ret
+	if len(functionCache) < maxFunctionCacheSize {
+		functionCache[function] = ret
+	}
 	return ret
 }
 
