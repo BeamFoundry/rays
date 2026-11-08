@@ -44,6 +44,9 @@ func ReduceFunctionName(function string) string {
 	dir := filepath.Dir(function)
 	base := filepath.Base(function)
 	comp := strings.SplitN(base, ".", 3)
+	if len(comp) < 2 || comp[0] == "" || comp[1] == "" {
+		return function
+	}
 	pkg := dir + "/" + comp[0]
 	obj := comp[1]
 	for k, v := range moduleCache {
@@ -57,6 +60,9 @@ func ReduceFunctionName(function string) string {
 	}
 
 	if strings.HasPrefix(obj, "(*") {
+		if len(obj) < 3 || !strings.HasSuffix(obj, ")") {
+			return function
+		}
 		obj = obj[2 : len(obj)-1]
 	}
 	obj = strings.Replace(obj, "[...]", "", 1)
