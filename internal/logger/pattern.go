@@ -30,11 +30,11 @@ const (
 	// JSONFormat is the standard JSON log format.
 	JSONFormat = `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%"json"v)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
-	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	ECSFormat = `{%time("@timestamp":%"RFC3339Nano"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// GELFFormat is the Graylog Extended Log Format (GELF) v1.1 JSON format.
-	GELFFormat = `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_qg:%qv))}`
+	GELFFormat = `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_.qg:%qv))}`
 	// LogstashFormat is the Logstash JSON event format.
-	LogstashFormat = `{"@version":"1"%time(,"@timestamp":%"RFC3339"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	LogstashFormat = `{"@version":"1"%time(,"@timestamp":%"RFC3339Nano"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	keyTime        = "time"
 	keyLevel       = "level"
 	keyMsg         = "msg"
@@ -325,6 +325,7 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 			attrCtx := *ctx
 			attrCtx.currentAttr = attr
 			attrCtx.isKey = false
+			attrCtx.inAttr = true
 			attrCtx.isLast = (i == len(attrs)-1) && len(ctx.groupChildren) == 0
 			n.inner.Render(&attrCtx, buf)
 		}
@@ -344,6 +345,7 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 			attrCtx.currentGroup = ""
 		}
 		attrCtx.isKey = false
+		attrCtx.inAttr = true
 		attrCtx.isLast = (i == len(attrs)-1)
 		n.inner.Render(&attrCtx, buf)
 	}
@@ -423,7 +425,7 @@ type ValueFormatNode struct {
 func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	var s string
 	switch n.target {
-	case "k", "qk", "ak", ".k", ".qk", ".ak", "_k", "_qk", "_ak", "q_k", "a_k":
+	case "k", "qk", "ak", ".k", ".qk", ".ak", "_k", "_qk", "_ak", "q_k", "a_k", "_.k", "_.qk", "_.ak":
 		s = n.renderKey(ctx)
 	case "v":
 		s = n.formatTimeOrValue(ctx, false)
@@ -468,7 +470,15 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 // renderKey formats a single attribute or record key with optional prefix and quoting.
 func (n *ValueFormatNode) renderKey(ctx *renderContext) string {
 	k := ctx.currentAttr.Key
+	if strings.Contains(n.target, "_") && strings.Contains(n.target, "q") {
+		k = encodeGELFKey(k)
+	}
 	switch {
+	case strings.HasPrefix(n.target, "_."):
+		k = "_." + k
+		if n.prefix != "" {
+			k = n.prefix + k
+		}
 	case strings.Contains(n.target, "."):
 		k = "." + k
 		if n.prefix != "" {
@@ -508,8 +518,18 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 	isUnderscore := strings.Contains(n.target, "_")
 
 	var name string
-	if ctx.currentAttr.Key != "" && (isDotted || isUnderscore) {
-		if isDotted {
+	if ctx.inAttr && (isDotted || isUnderscore) {
+		switch {
+		case isDotted && isUnderscore:
+			name = ctx.currentAttr.Key
+			if ctx.currentGroup != "" {
+				name = ctx.currentGroup + "." + ctx.currentAttr.Key
+			}
+			name = "_" + name
+			if n.prefix != "" {
+				name = n.prefix + name
+			}
+		case isDotted:
 			name = ctx.currentAttr.Key
 			if ctx.currentGroup != "" {
 				name = ctx.currentGroup + "." + ctx.currentAttr.Key
@@ -521,7 +541,7 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 					name = n.prefix + "." + name
 				}
 			}
-		} else {
+		default:
 			name = ctx.currentAttr.Key
 			if ctx.currentGroup != "" {
 				name = ctx.currentGroup + "_" + ctx.currentAttr.Key
@@ -535,6 +555,11 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 		name = ctx.currentGroup
 		if name != "" {
 			switch {
+			case isDotted && isUnderscore:
+				name = "_" + name
+				if n.prefix != "" {
+					name = n.prefix + name
+				}
 			case isDotted:
 				if n.prefix != "" {
 					if strings.HasSuffix(n.prefix, ".") {
@@ -556,8 +581,12 @@ func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
 		}
 	}
 
-	if name == "" && ctx.currentAttr.Key == "" {
+	if name == "" && !ctx.inAttr {
 		return ""
+	}
+
+	if isUnderscore && strings.Contains(n.target, "q") {
+		name = encodeGELFKey(name)
 	}
 
 	isQuoted := strings.Contains(n.target, "q")
@@ -607,28 +636,80 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 	return ctx.formatCurrentValue(quote)
 }
 
-// formatSource formats caller source information according to a custom layout, bypassing ReplaceAttr.
+// formatSource formats caller source information according to a custom layout, using ReplaceAttr value if available.
 func (n *ValueFormatNode) formatSource(ctx *renderContext) string {
-	src, ok := ctx.currentAttr.Value.Any().(*slog.Source)
-	if !ok || src == nil {
-		fs := runtime.CallersFrames([]uintptr{ctx.record.PC})
-		f, _ := fs.Next()
-		src = &slog.Source{
-			Function: f.Function,
-			File:     f.File,
-			Line:     f.Line,
+	isJsonLayout := strings.ToLower(strings.TrimSpace(n.timeFormat)) == "json"
+	if ctx.currentAttr.Value.Kind() == slog.KindString {
+		if isJsonLayout {
+			return formatJsonString(ctx.currentAttr.Value.String())
 		}
+		return ctx.currentAttr.Value.String()
 	}
-	switch strings.ToLower(strings.TrimSpace(n.timeFormat)) {
-	case "json":
+	if src, ok := ctx.currentAttr.Value.Any().(*slog.Source); ok {
+		if src == nil {
+			if isJsonLayout {
+				return "null"
+			}
+			return "<nil>"
+		}
+		if isJsonLayout {
+			return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
+				formatJsonString(filepath.Base(src.File)),
+				src.Line,
+				formatJsonString(src.Function),
+			)
+		}
+		return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+	}
+	if ctx.currentAttr.Value.Any() != nil {
+		return formatValue(ctx.currentAttr.Value, isJsonLayout)
+	}
+
+	fs := runtime.CallersFrames([]uintptr{ctx.record.PC})
+	f, _ := fs.Next()
+	src := &slog.Source{
+		Function: f.Function,
+		File:     f.File,
+		Line:     f.Line,
+	}
+	if isJsonLayout {
 		return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
 			formatJsonString(filepath.Base(src.File)),
 			src.Line,
 			formatJsonString(src.Function),
 		)
-	default:
-		return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 	}
+	return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+}
+
+// isGELFKeyChar reports whether a character is valid in GELF field names ([a-zA-Z0-9_.-]).
+func isGELFKeyChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'
+}
+
+// encodeGELFKey encodes characters invalid in GELF field names into non-colliding hex escape sequences.
+func encodeGELFKey(s string) string {
+	hasInvalid := false
+	for i := 0; i < len(s); i++ {
+		if !isGELFKeyChar(s[i]) {
+			hasInvalid = true
+			break
+		}
+	}
+	if !hasInvalid {
+		return s
+	}
+	const hexDigits = "0123456789abcdef"
+	buf := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isGELFKeyChar(c) {
+			buf = append(buf, c)
+		} else {
+			buf = append(buf, '_', 'x', hexDigits[c>>4], hexDigits[c&0x0f])
+		}
+	}
+	return string(buf)
 }
 
 // needsQuoting reports whether a key, group, or value string requires quoting in logfmt/text format.
@@ -826,7 +907,7 @@ func hasTimeFormat(node PatternNode) bool {
 	}
 }
 
-var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(\.qg|\.ag|\.g|\.qk|\.ak|\.k|_qg|_ag|_g|_qk|_ak|_k|q_gk|q_g_k|q_k|a_gk|a_g_k|a_k|q_g|a_g|agk|qgk|gk|qk|qv|qg|ak|av|ag|k|v|g)`)
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(\.qg|\.ag|\.g|\.qk|\.ak|\.k|_\.qg|_\.ag|_\.g|_\.qk|_\.ak|_\.k|_qg|_ag|_g|_qk|_ak|_k|q_gk|q_g_k|q_k|a_gk|a_g_k|a_k|q_g|a_g|agk|qgk|gk|qk|qv|qg|ak|av|ag|k|v|g)`)
 
 // matchFormatSpec parses a value or key format placeholder (%[-][min][.[-]max]["layout"]target).
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
@@ -1070,6 +1151,7 @@ type renderContext struct {
 	isKey         bool
 	isLast        bool
 	inGroup       bool
+	inAttr        bool
 	isJson        bool
 	isGELF        bool
 }
@@ -1142,6 +1224,12 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 				return v.String()
 			}
 			if src, ok := v.Any().(*slog.Source); ok {
+				if src == nil {
+					if quote {
+						return "null"
+					}
+					return "<nil>"
+				}
 				formatted := fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 				if quote {
 					return formatJsonString(formatted)
@@ -1159,10 +1247,10 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 			}
 			return v.String()
 		default:
-			return formatValue(v, quote)
+			return formatValue(v, quote, ctx.isGELF)
 		}
 	}
-	return formatValue(ctx.currentAttr.Value, quote)
+	return formatValue(ctx.currentAttr.Value, quote, ctx.isGELF)
 }
 
 // applyFormatModifier applies minimum width, maximum width, alignment, and truncation to a string.
@@ -1207,17 +1295,18 @@ func appendJsonString(buf *Buffer, s string) {
 }
 
 // formatValue formats an arbitrary slog.Value into a string representation.
-func formatValue(v slog.Value, quote bool) string {
+func formatValue(v slog.Value, quote bool, isGELF ...bool) string {
 	buf := NewBuffer()
 	defer buf.Free()
-	appendFormattedValue(buf, v, quote)
+	appendFormattedValue(buf, v, quote, isGELF...)
 	return string(*buf)
 }
 
 // appendFormattedValue renders a structured value into the buffer in JSON or text format.
 //
 //nolint:revive // quote controls whether values like strings are quoted
-func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
+func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool) {
+	gelfMode := len(isGELF) > 0 && isGELF[0]
 	switch v.Kind() {
 	case slog.KindString:
 		appendString(buf, v.String(), quote)
@@ -1283,6 +1372,15 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 			}
 			appendString(buf, string(data), quote)
 		case *slog.Source:
+			if cv == nil {
+				if quote {
+					//nolint:errcheck // buffer write cannot fail
+					buf.WriteString("null")
+				} else {
+					appendString(buf, "<nil>", false)
+				}
+				return
+			}
 			if quote {
 				appendString(buf, fmt.Sprintf("%s:%d", filepath.Join(filepath.Base(filepath.Dir(cv.File)), filepath.Base(cv.File)), cv.Line), true)
 			} else {
@@ -1303,16 +1401,24 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 				if jm, ok := cv.(json.Marshaler); ok {
 					b, err := jm.MarshalJSON()
 					if err == nil {
-						//nolint:errcheck // buffer write cannot fail
-						buf.WriteString(string(b))
+						if gelfMode {
+							appendJsonString(buf, string(b))
+						} else {
+							//nolint:errcheck // buffer write cannot fail
+							buf.WriteString(string(b))
+						}
 						return
 					}
 				}
 				if val.Kind() == reflect.Map || val.Kind() == reflect.Slice || val.Kind() == reflect.Array || val.Kind() == reflect.Struct {
 					b, err := json.Marshal(cv)
 					if err == nil {
-						//nolint:errcheck // buffer write cannot fail
-						buf.WriteString(string(b))
+						if gelfMode {
+							appendJsonString(buf, string(b))
+						} else {
+							//nolint:errcheck // buffer write cannot fail
+							buf.WriteString(string(b))
+						}
 						return
 					}
 				}

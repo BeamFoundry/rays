@@ -30,6 +30,10 @@ func reducePkgElements(elems []string) string {
 
 // ReduceFunctionName reduces a fully qualified function name for concise log source reporting.
 func ReduceFunctionName(function string) string {
+	if !strings.Contains(function, ".") {
+		return function
+	}
+
 	functionLock.Lock()
 	defer functionLock.Unlock()
 

@@ -280,7 +280,7 @@ func buildGroupInfos(allAttrs []collectedAttr, mode groupFormatMode) []groupInfo
 		var groups []groupInfo
 		for _, a := range allAttrs {
 			if len(a.groups) > 0 {
-				key := strings.Join(a.groups, "_")
+				key := strings.Join(a.groups, ".")
 				if idx, found := groupMap[key]; found {
 					groups[idx].attrs = append(groups[idx].attrs, a.attr)
 				} else {

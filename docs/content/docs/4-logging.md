@@ -120,9 +120,9 @@ Rays provides several pre-configured log handlers covering local development, st
 | `DEFAULT` | Human-readable console format with ANSI colors and styles | `%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}` |
 | `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %.ag=%qv))` |
 | `JSON` | Compact, standard JSON log output | `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%"json"v)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
-| `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
-| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_qg:%qv))}` |
-| `LOGSTASH` | Logstash JSON event format | `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339Nano"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_.qg:%qv))}` |
+| `LOGSTASH` | Logstash JSON event format | `{"@version":"1"%time(,"@timestamp":%"RFC3339Nano"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `CUSTOM` | Custom format defined by the `format` configuration property | Defined via `format:` |
 
 ---
@@ -166,7 +166,7 @@ Rays features a compiled pattern layout engine. The format pattern string is par
   - **Quoting variations**:
     - `%k` and `%v`: Raw, unquoted values as-is.
     - `%qk`: Quoted counterpart for keys, always enclosed in double quotes (e.g. `"key"`), escaped for JSON or quoted logfmt.
-    - `%qv`: Quoted counterpart for values. Quoting depends on attribute type: strings, durations, and timestamp strings are enclosed in double quotes (`"value"`), while numbers (integers, floats) and booleans remain unquoted, `nil` renders as `null`, and structured values (maps, structs, slices) render as JSON objects or arrays.
+    - `%qv`: Quoted counterpart for values. Quoting depends on attribute type: strings, durations, and timestamp strings are enclosed in double quotes (`"value"`), while numbers (integers, floats) and booleans remain unquoted, `nil` renders as `null`, and structured values (maps, structs, slices) render as JSON objects or arrays (or JSON-encoded strings in GELF additional fields).
     - `%ak` and `%av`: Automatic quoted counterparts. Values and keys are printed unquoted by default, but automatically quoted with double quotes if they contain spaces, equals signs (`=`), double quotes (`"`), control characters, or if empty. For `%av`, precision truncation truncates the underlying value before automatic quoting, and width modifiers apply padding outside the quoted string.
 
 - **Attribute Delimiter (`%nl`)**:
@@ -186,8 +186,9 @@ Rays features a compiled pattern layout engine. The format pattern string is par
   - `%.ag`: Automatically quoted dotted key (e.g. `metric.cpu` remains unquoted, but `"system metrics.cpu usage"` is quoted as a single combined string if either part contains spaces or equals signs).
 
 - **Prefixed Key & Group Specifiers**:
-  - `%_k`, `%_qk`, `%_ak`: Underscore-prefixed attribute keys (`_key`, `"_key"`), used in formats like GELF.
+  - `%_k`, `%_qk`, `%_ak`: Underscore-prefixed attribute keys (`_key`, `"_key"`), used in formats like GELF. Valid characters are preserved; invalid GELF field characters (including spaces) are hex-encoded in `%_qk`.
   - `%_g`, `%_qg`, `%_ag`: Underscore-prefixed group and attribute keys (`_group_key`, `"_group_key"`), prefixing the group and separating it from the key with an underscore.
+  - `%_.g`, `%_.qg`, `%_.ag`: Underscore-prefixed dotted group and attribute keys (`_group.key`, `"_group.key"`), prefixing the group with an underscore and separating it from the key with a dot, used in GELF to distinguish grouped attributes from top-level attributes.
   - `%.k`, `%.qk`, `%.ak`: Dot-prefixed attribute keys (`.key`, `".key"`).
   - Custom prefixes: A custom prefix can be specified in double quotes before the specifier, e.g. `%"custom"k` (yielding `customkey`) or `%"custom"g` (yielding `customgroup`).
   - Custom prefix combinations: Custom prefixes can be combined with dot or underscore notation:

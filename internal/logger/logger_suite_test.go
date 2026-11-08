@@ -568,7 +568,7 @@ var _ = Describe("PatternHandler", func() {
 
 	It("formats with ECSFormat", func() {
 		h := logger.NewHandlerWithFormat(buf, opts, logger.ECSFormat)
-		fixedTime := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+		fixedTime := time.Date(2026, 11, 5, 12, 0, 0, 123456789, time.UTC)
 		r := slog.Record{
 			Time:    fixedTime,
 			Message: "Application started",
@@ -584,7 +584,7 @@ var _ = Describe("PatternHandler", func() {
 
 		var js map[string]any
 		Expect(json.Unmarshal([]byte(output), &js)).To(Succeed())
-		Expect(js["@timestamp"]).To(Equal("2026-11-05T12:00:00Z"))
+		Expect(js["@timestamp"]).To(Equal("2026-11-05T12:00:00.123456789Z"))
 		Expect(js["log.level"]).To(Equal("INFO"))
 		Expect(js["message"]).To(Equal("Application started"))
 		Expect(js["ecs.version"]).To(Equal("1.2.0"))
@@ -625,12 +625,12 @@ var _ = Describe("PatternHandler", func() {
 		Expect(js["_user_id"]).To(Equal("u123"))
 		Expect(js["_retry"]).To(BeEquivalentTo(3))
 		Expect(js["_flag"]).To(BeEquivalentTo(1))
-		Expect(js["_details_env"]).To(Equal("prod"))
+		Expect(js["_details.env"]).To(Equal("prod"))
 	})
 
 	It("formats with LogstashFormat", func() {
 		h := logger.NewHandlerWithFormat(buf, opts, logger.LogstashFormat)
-		fixedTime := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+		fixedTime := time.Date(2026, 11, 5, 12, 0, 0, 123456789, time.UTC)
 		r := slog.Record{
 			Time:    fixedTime,
 			Message: "Logstash message",
@@ -647,7 +647,7 @@ var _ = Describe("PatternHandler", func() {
 		var js map[string]any
 		Expect(json.Unmarshal([]byte(output), &js)).To(Succeed())
 		Expect(js["@version"]).To(Equal("1"))
-		Expect(js["@timestamp"]).To(Equal("2026-11-05T12:00:00Z"))
+		Expect(js["@timestamp"]).To(Equal("2026-11-05T12:00:00.123456789Z"))
 		Expect(js["level"]).To(Equal("ERROR"))
 		Expect(js["message"]).To(Equal("Logstash message"))
 		Expect(js["source"]).NotTo(BeNil())
@@ -1749,9 +1749,9 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
-		Expect(js["_my_group_a"]).To(Equal("1"))
-		Expect(js["_my_group_b"]).To(Equal("2"))
-		Expect(js["_my_group_flag"]).To(Equal(float64(0)))
+		Expect(js["_my_group.a"]).To(Equal("1"))
+		Expect(js["_my_group.b"]).To(Equal("2"))
+		Expect(js["_my_group.flag"]).To(Equal(float64(0)))
 	})
 
 	It("handles edge cases in cleanJsonCommas", func() {
@@ -2117,7 +2117,12 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hGQU := hQUnderscore.WithGroup("grp")
 		Expect(hGQU.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring(`"_grp_plain"=1`))
-		Expect(buf.String()).To(ContainSubstring(`"_grp_has space"=2`))
+		Expect(buf.String()).To(ContainSubstring(`"_grp_has_x20space"=2`))
+
+		buf.Reset()
+		Expect(hQUnderscore.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"_plain"=1`))
+		Expect(buf.String()).To(ContainSubstring(`"_has_x20space"=2`))
 
 		// %_ak auto-quoted key
 		buf.Reset()
@@ -2280,12 +2285,20 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 			},
 		}
 
-		// %source(%"json"v) bypasses ReplaceAttr and outputs structured JSON
+		// %source(%"json"v) formats ReplaceAttr value if provided
 		buf.Reset()
 		hJSONSrc := logger.NewHandlerWithFormat(buf, optsReplacedSource, `%source(%"json"v)`+"\n")
 		pc, _, _, _ := runtime.Caller(0)
 		r := slog.Record{Time: testTime, Message: "src test", PC: pc}
 		Expect(hJSONSrc.Handle(context.Background(), r)).To(Succeed())
+		var strReplaced string
+		Expect(json.Unmarshal(buf.Bytes(), &strReplaced)).To(Succeed())
+		Expect(strReplaced).To(Equal("replaced_source_string"))
+
+		// %source(%"json"v) without ReplaceAttr outputs structured JSON
+		buf.Reset()
+		hJSONDefault := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, `%source(%"json"v)`+"\n")
+		Expect(hJSONDefault.Handle(context.Background(), r)).To(Succeed())
 		var js map[string]any
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
 		fileInfo, ok := js["file"].(map[string]any)
@@ -2314,6 +2327,239 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(buf.String()).To(ContainSubstring("logger_suite_test.go:"))
 		Expect(buf.String()).To(ContainSubstring(`) "`))
 	})
+
+	It("prevents field collision in GELFFormat between top-level and grouped attributes", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
+		r := slog.Record{Time: testTime, Message: "collision check"}
+		r.Add(slog.String("user_id", "top_user_val"))
+		r.Add(slog.Group("user", slog.String("id", "grouped_user_val")))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["_user_id"]).To(Equal("top_user_val"))
+		Expect(js["_user.id"]).To(Equal("grouped_user_val"))
+	})
+
+	It("JSON-encodes maps, structs, and slices as strings in GELFFormat additional fields", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
+		r := slog.Record{Time: testTime, Message: "gelf complex values"}
+		r.Add(
+			slog.Any("meta_map", map[string]string{"env": "staging"}),
+			slog.Any("meta_slice", []string{"alpha", "beta"}),
+			slog.Any("meta_struct", CustomJSONType{Name: "custom_val"}),
+			slog.String("plain_str", "hello"),
+			slog.Int("count", 42),
+			slog.Float64("score", 98.5),
+		)
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["_meta_map"]).To(Equal(`{"env":"staging"}`))
+		Expect(js["_meta_slice"]).To(Equal(`["alpha","beta"]`))
+		Expect(js["_meta_struct"]).To(Equal(`{"custom":"custom_val"}`))
+		Expect(js["_plain_str"]).To(Equal("hello"))
+		Expect(js["_count"]).To(BeEquivalentTo(42))
+		Expect(js["_score"]).To(BeNumerically("~", 98.5, 0.001))
+	})
+
+	It("returns dotless function name unchanged in ReduceFunctionName without panicking", func() {
+		Expect(logger.ReduceFunctionName("dotlessFunc")).To(Equal("dotlessFunc"))
+		Expect(logger.ReduceFunctionName("")).To(Equal(""))
+	})
+
+	It("handles typed-nil *slog.Source in source formatting paths", func() {
+		var nilSrc *slog.Source
+		b := logger.NewBuffer()
+		logger.AppendFormattedValue(b, slog.AnyValue(nilSrc), true)
+		Expect(b.String()).To(Equal("null"))
+
+		b.Reset()
+		logger.AppendFormattedValue(b, slog.AnyValue(nilSrc), false)
+		Expect(b.String()).To(Equal("<nil>"))
+
+		optsNilSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, nilSrc)
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hJSONNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, logger.JSONFormat)
+		r := slog.Record{Time: testTime, Message: "nil src test", PC: getFramePointer()}
+		Expect(hJSONNilSrc.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["source"]).To(BeNil())
+
+		buf.Reset()
+		hUnquotedNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `%source(%v)`+"\n")
+		Expect(hUnquotedNilSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("<nil>\n"))
+
+		buf.Reset()
+		hQNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `%source(%qv)`+"\n")
+		Expect(hQNilSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("null\n"))
+
+		buf.Reset()
+		hCustomNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `%source(%"custom"v)`+"\n")
+		Expect(hCustomNilSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("<nil>\n"))
+	})
+
+	It("formats ReplaceAttr source value in JSON, ECS, and Logstash layouts without reconstructing PC", func() {
+		optsCustomSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.String(slog.SourceKey, "replaced/source.go:99")
+				}
+				return a
+			},
+		}
+		r := slog.Record{Time: testTime, Message: "custom src test", PC: getFramePointer()}
+
+		// JSONFormat
+		buf.Reset()
+		hJSON := logger.NewHandlerWithFormat(buf, optsCustomSrc, logger.JSONFormat)
+		Expect(hJSON.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["source"]).To(Equal("replaced/source.go:99"))
+
+		// ECSFormat
+		buf.Reset()
+		hECS := logger.NewHandlerWithFormat(buf, optsCustomSrc, logger.ECSFormat)
+		Expect(hECS.Handle(context.Background(), r)).To(Succeed())
+		var jsECS map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsECS)).To(Succeed())
+		Expect(jsECS["log.origin"]).To(Equal("replaced/source.go:99"))
+
+		// LogstashFormat
+		buf.Reset()
+		hLogstash := logger.NewHandlerWithFormat(buf, optsCustomSrc, logger.LogstashFormat)
+		Expect(hLogstash.Handle(context.Background(), r)).To(Succeed())
+		var jsLogstash map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsLogstash)).To(Succeed())
+		Expect(jsLogstash["source"]).To(Equal("replaced/source.go:99"))
+
+		// ReplaceAttr with custom struct in JSON layout
+		optsStructSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, CustomJSONType{Name: "custom_src"})
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hJSONStruct := logger.NewHandlerWithFormat(buf, optsStructSrc, logger.JSONFormat)
+		Expect(hJSONStruct.Handle(context.Background(), r)).To(Succeed())
+		var jsStruct map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsStruct)).To(Succeed())
+		srcObj, ok := jsStruct["source"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(srcObj["custom"]).To(Equal("custom_src"))
+	})
+
+	It("preserves dotted and underscore separators for empty attribute keys inside groups", func() {
+		// TextFormat emits trailing dot
+		buf.Reset()
+		hText := logger.NewHandlerWithFormat(buf, nil, logger.TextFormat)
+		r := slog.Record{Time: testTime, Message: "empty key test"}
+		r.Add(slog.Group("my_group", slog.String("", "empty_key_val")))
+		Expect(hText.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`my_group.="empty_key_val"`))
+
+		// Underscore format emits trailing underscore
+		buf.Reset()
+		hUnderscore := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(,%_qg:%qv))`+"\n")
+		Expect(hUnderscore.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`,"_my_group_":"empty_key_val"`))
+	})
+
+	It("covers fallback and string formatting in formatSource", func() {
+		optsNilVal := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, nil)
+				}
+				return a
+			},
+		}
+		// Fallback with PC in JSON layout
+		buf.Reset()
+		hFallbackJSON := logger.NewHandlerWithFormat(buf, optsNilVal, logger.JSONFormat)
+		rWithPC := slog.Record{Time: testTime, Message: "fb", PC: getFramePointer()}
+		Expect(hFallbackJSON.Handle(context.Background(), rWithPC)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["source"]).NotTo(BeNil())
+
+		// Fallback with PC in unquoted custom layout
+		buf.Reset()
+		hFallbackCustom := logger.NewHandlerWithFormat(buf, optsNilVal, `%source(%"custom"v)`+"\n")
+		Expect(hFallbackCustom.Handle(context.Background(), rWithPC)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("("))
+		Expect(buf.String()).To(ContainSubstring(")"))
+
+		// String replacement in unquoted custom layout
+		optsStr := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.String(slog.SourceKey, "custom_str_source")
+				}
+				return a
+			},
+		}
+		buf.Reset()
+		hStrCustom := logger.NewHandlerWithFormat(buf, optsStr, `%source(%"custom"v)`+"\n")
+		Expect(hStrCustom.Handle(context.Background(), rWithPC)).To(Succeed())
+		Expect(buf.String()).To(Equal("custom_str_source\n"))
+	})
+
+	It("covers underscore-prefixed dotted keys and groups with custom prefixes", func() {
+		buf.Reset()
+		hDotUnder := logger.NewHandlerWithFormat(buf, nil, `%attr(%_.k=%v %"pfx"_.k=%v)`+"\n")
+		rKey := slog.Record{Time: testTime, Message: "test"}
+		rKey.Add(slog.String("key", "val"))
+		Expect(hDotUnder.Handle(context.Background(), rKey)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_.key=val"))
+		Expect(buf.String()).To(ContainSubstring("pfx_.key=val"))
+
+		// Inside group with custom prefix
+		buf.Reset()
+		hCombo := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx"_.g=%v ))`+"\n")
+		rGrp := slog.Record{Time: testTime, Message: "test"}
+		rGrp.Add(slog.Group("grp", slog.String("plain", "1")))
+		Expect(hCombo.Handle(context.Background(), rGrp)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx_grp.plain=1"))
+
+		// Outside attr in group
+		buf.Reset()
+		hGrpDirect := logger.NewHandlerWithFormat(buf, nil, `%grp(%_.g %"pfx"_.g)`+"\n")
+		Expect(hGrpDirect.Handle(context.Background(), rGrp)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_grp pfx_grp"))
+	})
+
+	It("handles nil pointer panics in appendFormattedValue with quoting", func() {
+		b := logger.NewBuffer()
+		var p *NilTextPanicker
+		logger.AppendFormattedValue(b, slog.AnyValue(p), true)
+		Expect(b.String()).To(Equal("null"))
+
+		b.Reset()
+		logger.AppendFormattedValue(b, slog.AnyValue(p), false)
+		Expect(b.String()).To(Equal("<nil>"))
+	})
 })
 
 type ErrorTextMarshaler struct{}
@@ -2326,7 +2572,7 @@ type CustomJSONType struct {
 	Name string `json:"name"`
 }
 
-func (c *CustomJSONType) MarshalJSON() ([]byte, error) {
+func (c CustomJSONType) MarshalJSON() ([]byte, error) {
 	return []byte(`{"custom":"` + c.Name + `"}`), nil
 }
 
@@ -2348,4 +2594,11 @@ type NonNilPanicker struct{}
 
 func (n NonNilPanicker) MarshalText() ([]byte, error) {
 	panic("boom")
+}
+
+type NilTextPanicker struct{}
+
+func (n *NilTextPanicker) MarshalText() ([]byte, error) {
+	_ = *n
+	return []byte("text"), nil
 }
