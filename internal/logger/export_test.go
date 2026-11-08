@@ -32,4 +32,10 @@ var (
 		}
 		return node.formatSource(ctx)
 	}
+	GetFunctionCacheEntry = func(fn string) (string, bool) {
+		functionLock.Lock()
+		defer functionLock.Unlock()
+		v, ok := functionCache[fn]
+		return v, ok
+	}
 )

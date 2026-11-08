@@ -228,7 +228,7 @@ When `source: true` is configured, `%source(...)` extracts runtime caller inform
 
 - **Unquoted (`%v` or `%av`)**: Renders human-readable caller location with reduced package names, formatted as `function(file:line)` (e.g. `main.run(server.go:42)`).
 - **Quoted (`%qv`)**: Emits the human-readable caller location as a quoted string (e.g. `"main.run(server.go:42)"`).
-- **Custom JSON Layout (`%"json"v`)**: Emits a structured JSON object containing the file name, line number, and function name, bypassing `ReplaceAttr`:
+- **Custom JSON Layout (`%"json"v`)**: Emits source location details. Note that `ReplaceAttr` runs before formatting and that default Rays options emit a quoted location string; emitting the structured JSON object is conditional on `ReplaceAttr` preserving the `source` key with a `slog.Source` or non-nil `*slog.Source` value:
   ```json
   {"file":{"name":"server.go","line":42},"function":"main.run"}
   ```
