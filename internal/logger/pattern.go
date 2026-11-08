@@ -26,7 +26,7 @@ const (
 	// DefaultFormat is the default log pattern format using colored output.
 	DefaultFormat = "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
 	// TextFormat is the standard slog logfmt-style text pattern.
-	TextFormat = `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%v) %source(%ak=%v )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %ag.%ak=%qv))`
+	TextFormat = `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %agk=%qv))`
 	// JSONFormat is the standard JSON log format.
 	JSONFormat = `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
@@ -455,10 +455,33 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	case "qv":
 		s = n.formatTimeOrValue(ctx, true)
 	case "av":
-		s = n.formatTimeOrValue(ctx, false)
-		if needsQuoting(s) {
-			s = formatJsonString(s)
+		raw := n.formatTimeOrValue(ctx, false)
+		runes := []rune(raw)
+		if n.hasMax && len(runes) > n.maxWidth {
+			if n.truncEnd {
+				runes = runes[:n.maxWidth]
+			} else {
+				runes = runes[len(runes)-n.maxWidth:]
+			}
+			raw = string(runes)
 		}
+		if needsQuoting(raw) {
+			s = formatJsonString(raw)
+		} else {
+			s = raw
+		}
+		sRunes := []rune(s)
+		if len(sRunes) < n.minWidth {
+			padding := strings.Repeat(" ", n.minWidth-len(sRunes))
+			if n.leftAlign {
+				s += padding
+			} else {
+				s = padding + s
+			}
+		}
+		//nolint:errcheck // buffer write cannot fail
+		buf.WriteString(s)
+		return
 	case "g":
 		s = ctx.currentGroup
 	case "qg":
@@ -472,6 +495,37 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 			} else {
 				s = ctx.currentGroup
 			}
+		}
+	case "gk":
+		name := ctx.currentAttr.Key
+		if ctx.currentGroup != "" {
+			name = ctx.currentGroup + "." + ctx.currentAttr.Key
+		}
+		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
+			name = n.prefix + name
+		}
+		s = name
+	case "qgk":
+		name := ctx.currentAttr.Key
+		if ctx.currentGroup != "" {
+			name = ctx.currentGroup + "." + ctx.currentAttr.Key
+		}
+		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
+			name = n.prefix + name
+		}
+		s = formatJsonString(name)
+	case "agk":
+		name := ctx.currentAttr.Key
+		if ctx.currentGroup != "" {
+			name = ctx.currentGroup + "." + ctx.currentAttr.Key
+		}
+		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
+			name = n.prefix + name
+		}
+		if needsQuoting(name) {
+			s = formatJsonString(name)
+		} else {
+			s = name
 		}
 	case "q_gk", "q_g_k":
 		name := "_" + ctx.currentAttr.Key
@@ -726,7 +780,7 @@ func hasTimeFormat(node PatternNode) bool {
 	}
 }
 
-var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|qk|qv|qg|a_gk|a_g_k|a_k|ak|av|ag|k|v|g)`)
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|a_gk|a_g_k|a_k|agk|qgk|gk|qk|qv|qg|ak|av|ag|k|v|g)`)
 
 // matchFormatSpec parses a value or key format placeholder (%[-][min][.[-]max]["layout"]target).
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
