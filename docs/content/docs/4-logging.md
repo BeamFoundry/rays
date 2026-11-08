@@ -118,11 +118,11 @@ Rays provides several pre-configured log handlers covering local development, st
 | Handler | Description | Underlying Pattern |
 | :--- | :--- | :--- |
 | `DEFAULT` | Human-readable console format with ANSI colors and styles | `%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}` |
-| `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %agk=%qv))` |
-| `JSON` | Compact, standard JSON log output | `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
-| `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
-| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%q_k:%qv)%grp(%attr(,%q_gk:%qv))}` |
-| `LOGSTASH` | Logstash JSON event format | `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `TEXT` | Standard `logfmt` key-value style | `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %.ag=%qv))` |
+| `JSON` | Compact, standard JSON log output | `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%"json"v)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `ECS` | Elastic Common Schema (ECS v1.2.0) JSON | `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv),%msg("message":%qv),"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
+| `GELF` | Graylog Extended Log Format (GELF v1.1) JSON | `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_qg:%qv))}` |
+| `LOGSTASH` | Logstash JSON event format | `{"@version":"1",%time("@timestamp":%"RFC3339"qv,)%level("level":%qv),%msg("message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}` |
 | `CUSTOM` | Custom format defined by the `format` configuration property | Defined via `format:` |
 
 ---
@@ -137,11 +137,11 @@ Rays features a compiled pattern layout engine. The format pattern string is par
 | :--- | :--- | :--- |
 | `%time(...)` | Renders the log record timestamp | Generic placeholders `%v`, `%qv`, `%av`, or custom layout `%"<layout>"v`, `%"<layout>"qv`, `%"<layout>"av` |
 | `%level(...)` | Renders the record log level | Generic placeholders `%v`, `%-5v`, `%k=%v`, `%qv`, `%av`, or syslog severity `%"syslog"v` |
-| `%source(...)` | Renders the reduced source file and line (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%av`, `%k=%v` |
+| `%source(...)` | Renders the caller source location (only if `source: true`) | Generic placeholders `%v`, `%qv`, `%av`, `%k=%v`, or custom layout `%"json"v` |
 | `%msg(...)` | Renders the log message | Generic placeholders `%v`, `%qv`, `%av`, `%k=%qv` |
 | `%host(...)` | Renders the machine hostname (cached) | Generic placeholders `%v`, `%qv`, `%av`, `host=%qv` |
 | `%attr(...)` | Iterates over top-level structured attributes | Generic placeholders `%k`, `%qk`, `%ak`, `%v`, `%qv`, `%av` and delimiter `%nl(...)` |
-| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, `%ag`, dotted `%gk`, `%qgk`, `%agk`, nested `%attr(...)` |
+| `%grp(...)` | Iterates over attribute groups | Group placeholders `%g`, `%qg`, `%ag`, dotted `%.g`, `%.qg`, `%.ag`, underscore `%_g`, `%_qg`, `%_ag`, nested `%attr(...)` |
 | `%nl(...)` | Renders its contents only if the current item is **not the last** | Static delimiter (e.g. `%nl(,)` or `%nl( )`), used inside `%attr(...)` |
 | `%clr(...)` | Wraps inner content in ANSI color and mode escape sequences | See [ANSI Styling](#ansi-styling) below |
 
@@ -179,16 +179,22 @@ Rays features a compiled pattern layout engine. The format pattern string is par
   - `%ag`: Automatic quoted group name (quoted only if containing spaces, equals signs, quotes, or control characters).
   Attributes within the group are iterated using a nested `%attr(...)`.
 
-- **Dotted Group Key Specifiers (`%gk`, `%qgk`, `%agk`)**:
+- **Dotted Group Key Specifiers (`%.g`, `%.qg`, `%.ag`)**:
   Apply inside nested `%attr(...)` within `%grp(...)` to format the combined dotted group and attribute key (`group.key`):
-  - `%gk`: Raw unquoted dotted key (e.g. `metric.cpu`).
-  - `%qgk`: Always quoted dotted key (e.g. `"metric.cpu"`).
-  - `%agk`: Automatically quoted dotted key (e.g. `metric.cpu` remains unquoted, but `"system metrics.cpu usage"` is quoted as a single combined string if either part contains spaces or equals signs).
+  - `%.g`: Raw unquoted dotted key (e.g. `metric.cpu`).
+  - `%.qg`: Always quoted dotted key (e.g. `"metric.cpu"`).
+  - `%.ag`: Automatically quoted dotted key (e.g. `metric.cpu` remains unquoted, but `"system metrics.cpu usage"` is quoted as a single combined string if either part contains spaces or equals signs).
 
-- **Prefixed Key Specifiers**:
-  - `%q_k` and `%a_k`: Underscore-prefixed attribute keys (`_key`), used in formats like GELF.
-  - `%q_gk` and `%a_gk`: Underscore-prefixed group and attribute keys (`_group_key`), flattened with underscores.
-  - Custom key prefixes: A custom prefix can be specified in double quotes before the specifier, e.g. `%"app."ak`, `%"_"qk`, or `%"custom_"agk`.
+- **Prefixed Key & Group Specifiers**:
+  - `%_k`, `%_qk`, `%_ak`: Underscore-prefixed attribute keys (`_key`, `"_key"`), used in formats like GELF.
+  - `%_g`, `%_qg`, `%_ag`: Underscore-prefixed group and attribute keys (`_group_key`, `"_group_key"`), prefixing the group and separating it from the key with an underscore.
+  - `%.k`, `%.qk`, `%.ak`: Dot-prefixed attribute keys (`.key`, `".key"`).
+  - Custom prefixes: A custom prefix can be specified in double quotes before the specifier, e.g. `%"custom"k` (yielding `customkey`) or `%"custom"g` (yielding `customgroup`).
+  - Custom prefix combinations: Custom prefixes can be combined with dot or underscore notation:
+    - `%"custom".k`: Key prefixed with a dot (`custom.key`).
+    - `%"custom"_k`: Key prefixed with an underscore (`custom_key`).
+    - `%"custom".g`: Dotted group key with custom prefix (`custom.group.key`).
+    - `%"custom"_g`: Underscore group key with custom prefix (`custom_group_key`).
 
 ### Padding and Truncation Modifiers
 
@@ -220,7 +226,8 @@ The `%level(...)` placeholder formats the log level name by default (`INFO`, `WA
 When `source: true` is configured, `%source(...)` extracts runtime caller information:
 
 - **Unquoted (`%v` or `%av`)**: Renders human-readable caller location with reduced package names, formatted as `function(file:line)` (e.g. `main.run(server.go:42)`).
-- **Quoted (`%qv`)**: Emits a structured JSON object containing the file name, line number, and function name:
+- **Quoted (`%qv`)**: Emits the human-readable caller location as a quoted string (e.g. `"main.run(server.go:42)"`).
+- **Custom JSON Layout (`%"json"v`)**: Emits a structured JSON object containing the file name, line number, and function name, bypassing `ReplaceAttr`:
   ```json
   {"file":{"name":"server.go","line":42},"function":"main.run"}
   ```

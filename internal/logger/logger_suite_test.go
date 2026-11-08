@@ -2060,55 +2060,129 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(buf.String()).To(ContainSubstring(`"_spaced item"=2`))
 	})
 
-	It("formats grouped keys with %agk, %qgk, and %gk", func() {
-		testTime := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
-
-		// %agk in group
+	It("formats grouped keys with %.ag, %.qg, and %.g and prefixed keys with %_k and %_g", func() {
+		// %.ag in group
 		buf.Reset()
-		hAGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%agk=%v%nl( )))`)
-		hG := hAGK.WithGroup("my group")
+		hAG := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%.ag=%v%nl( )))`)
+		hG := hAG.WithGroup("my group")
 		r := slog.Record{Time: testTime, Message: "test"}
 		r.Add(slog.String("plain", "1"), slog.String("has space", "2"))
 		Expect(hG.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring(`"my group.plain"=1`))
 		Expect(buf.String()).To(ContainSubstring(`"my group.has space"=2`))
 
-		// %agk without group spaces
+		// %.ag without group spaces
 		buf.Reset()
-		hG2 := hAGK.WithGroup("grp")
+		hG2 := hAG.WithGroup("grp")
 		Expect(hG2.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("grp.plain=1"))
 		Expect(buf.String()).To(ContainSubstring(`"grp.has space"=2`))
 
-		// %agk without group at top level
+		// %.ag without group at top level
 		buf.Reset()
-		hTopAGK := logger.NewHandlerWithFormat(buf, nil, `%attr(%"pfx."agk=%v%nl( ))`)
+		hTopAG := logger.NewHandlerWithFormat(buf, nil, `%attr(%"pfx.".ag=%v%nl( ))`)
 		rTop := slog.Record{Time: testTime, Message: "test"}
 		rTop.Add(slog.String("item", "1"), slog.String("spaced item", "2"))
-		Expect(hTopAGK.Handle(context.Background(), rTop)).To(Succeed())
+		Expect(hTopAG.Handle(context.Background(), rTop)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pfx.item=1"))
 		Expect(buf.String()).To(ContainSubstring(`"pfx.spaced item"=2`))
 
-		// %qgk always quotes
+		// %.qg always quotes
 		buf.Reset()
-		hQGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx."qgk=%v%nl( )))`)
-		hGQGK := hQGK.WithGroup("grp")
-		Expect(hGQGK.Handle(context.Background(), r)).To(Succeed())
+		hQG := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx.".qg=%v%nl( )))`)
+		hGQG := hQG.WithGroup("grp")
+		Expect(hGQG.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring(`"pfx.grp.plain"=1`))
 		Expect(buf.String()).To(ContainSubstring(`"pfx.grp.has space"=2`))
 
-		// %gk raw unquoted
+		// %.g raw unquoted
 		buf.Reset()
-		hGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx."gk=%v%nl( )))`)
-		hGGK := hGK.WithGroup("grp")
-		Expect(hGGK.Handle(context.Background(), r)).To(Succeed())
+		hGRaw := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx.".g=%v%nl( )))`)
+		hGG := hGRaw.WithGroup("grp")
+		Expect(hGG.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pfx.grp.plain=1"))
 		Expect(buf.String()).To(ContainSubstring("pfx.grp.has space=2"))
+
+		// %_k and %_g with underscore prefix and separation
+		buf.Reset()
+		hUnderscore := logger.NewHandlerWithFormat(buf, nil, `%attr(%_k=%v )%grp(%attr(%_g=%v%nl( )))`)
+		hGU := hUnderscore.WithGroup("grp")
+		Expect(hGU.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_grp_plain=1"))
+		Expect(buf.String()).To(ContainSubstring("_grp_has space=2"))
+
+		// %_qk and %_qg quoted
+		buf.Reset()
+		hQUnderscore := logger.NewHandlerWithFormat(buf, nil, `%attr(%_qk=%v )%grp(%attr(%_qg=%v%nl( )))`)
+		hGQU := hQUnderscore.WithGroup("grp")
+		Expect(hGQU.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"_grp_plain"=1`))
+		Expect(buf.String()).To(ContainSubstring(`"_grp_has space"=2`))
+
+		// %_ak auto-quoted key
+		buf.Reset()
+		hAK := logger.NewHandlerWithFormat(buf, nil, `%attr(%_ak=%v%nl( ))`)
+		Expect(hAK.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("_plain=1"))
+		Expect(buf.String()).To(ContainSubstring(`"_has space"=2`))
+
+		// %"custom".k and %"custom"_g combination
+		buf.Reset()
+		hCustomCombo := logger.NewHandlerWithFormat(buf, nil, `%attr(%"custom".k=%v )%grp(%attr(%"custom"_g=%v%nl( )))`)
+		rCombo := slog.Record{Time: testTime, Message: "test"}
+		rCombo.Add(slog.String("top_item", "top_val"))
+		rCombo.Add(slog.Group("grp", slog.String("plain", "1"), slog.String("has space", "2")))
+		Expect(hCustomCombo.Handle(context.Background(), rCombo)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("custom.top_item=top_val"))
+		Expect(buf.String()).To(ContainSubstring("custom_grp_plain=1"))
+
+		// %"custom"k and %"custom"g
+		buf.Reset()
+		hCustomSimple := logger.NewHandlerWithFormat(buf, nil, `%attr(%"custom"k=%v )%grp(%"custom"g:%attr(%k=%v%nl( )))`)
+		Expect(hCustomSimple.Handle(context.Background(), rCombo)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("customtop_item=top_val"))
+		Expect(buf.String()).To(ContainSubstring("customgrp:plain=1"))
+
+		// %"custom"_k and %"custom".g
+		buf.Reset()
+		hCustomCombo2 := logger.NewHandlerWithFormat(buf, nil, `%attr(%"custom"_k=%v )%grp(%attr(%"custom".g=%v%nl( )))`)
+		Expect(hCustomCombo2.Handle(context.Background(), rCombo)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("custom_top_item=top_val"))
+		Expect(buf.String()).To(ContainSubstring("custom.grp.plain=1"))
+
+		// %.k, %.qk, %.ak dotted keys
+		buf.Reset()
+		hDotKey := logger.NewHandlerWithFormat(buf, nil, `%attr(%.k=%v %.qk=%v %.ak=%v %"pfx.".k=%v%nl( ))`)
+		Expect(hDotKey.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(".plain=1 \".plain\"=1 .plain=1 pfx.plain=1"))
+		Expect(buf.String()).To(ContainSubstring(".has space=2 \".has space\"=2 \".has space\"=2 pfx.has space=2"))
+
+		// %grp with %"custom".g, %"custom.".g, %"custom"_g outside %attr
+		buf.Reset()
+		hGrpOutside := logger.NewHandlerWithFormat(buf, nil, `%grp(%"custom".g=1 %"custom.".g=2 %"custom"_g=3 %_g=4 )`)
+		hGO := hGrpOutside.WithGroup("grp")
+		Expect(hGO.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("custom.grp=1 custom.grp=2 custom_grp=3 _grp=4 \n"))
+
+		// %k with prefix always prepends prefix, even if key already starts with it
+		buf.Reset()
+		hPfxK := logger.NewHandlerWithFormat(buf, nil, `%attr(%"pfx."k=%v%nl( ))`)
+		rPfxK := slog.Record{Time: testTime, Message: "test"}
+		rPfxK.Add(slog.String("item", "1"), slog.String("pfx.existing", "2"))
+		Expect(hPfxK.Handle(context.Background(), rPfxK)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx.item=1"))
+		Expect(buf.String()).To(ContainSubstring("pfx.pfx.existing=2"))
+
+		// %gk with prefix always prepends prefix, even if group already starts with it
+		buf.Reset()
+		hPfxGK := logger.NewHandlerWithFormat(buf, nil, `%grp(%attr(%"pfx."gk=%v%nl( )))`)
+		hGPfx := hPfxGK.WithGroup("pfx.grp")
+		Expect(hGPfx.Handle(context.Background(), rPfxK)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pfx.pfx.grp.item=1"))
+		Expect(buf.String()).To(ContainSubstring("pfx.pfx.grp.pfx.existing=2"))
 	})
 
 	It("applies precision truncation before quoting and width padding outside quotes for %av", func() {
-		testTime := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
-
 		// %.-5av truncates from end: "hello world" -> keeps leading 5 "hello" (no space, unquoted)
 		buf.Reset()
 		h1 := logger.NewHandlerWithFormat(buf, nil, `%attr(%.-5av%nl( ))`)
@@ -2193,6 +2267,52 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(logger.NeedsQuoting(string([]byte{0x7f}))).To(BeTrue())
 		Expect(logger.NeedsQuoting("line\nbreak")).To(BeTrue())
 		Expect(logger.NeedsQuoting("Montréal")).To(BeFalse())
+	})
+
+	It("supports custom source formatting and bypasses ReplaceAttr", func() {
+		optsReplacedSource := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.String(slog.SourceKey, "replaced_source_string")
+				}
+				return a
+			},
+		}
+
+		// %source(%"json"v) bypasses ReplaceAttr and outputs structured JSON
+		buf.Reset()
+		hJSONSrc := logger.NewHandlerWithFormat(buf, optsReplacedSource, `%source(%"json"v)`+"\n")
+		pc, _, _, _ := runtime.Caller(0)
+		r := slog.Record{Time: testTime, Message: "src test", PC: pc}
+		Expect(hJSONSrc.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		fileInfo, ok := js["file"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fileInfo["name"]).To(Equal("logger_suite_test.go"))
+		Expect(js["function"]).NotTo(BeEmpty())
+
+		// %source(%"json"qv) quotes the JSON output
+		buf.Reset()
+		hJSONQVSrc := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, `%source(%"json"qv)`+"\n")
+		Expect(hJSONQVSrc.Handle(context.Background(), r)).To(Succeed())
+		var str string
+		Expect(json.Unmarshal(buf.Bytes(), &str)).To(Succeed())
+		Expect(str).To(ContainSubstring(`"file":{"name":"logger_suite_test.go"`))
+
+		// %source(%"custom"v) default layout in formatSource
+		buf.Reset()
+		hCustomSrc := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, `%source(%"custom"v)`+"\n")
+		Expect(hCustomSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("logger_suite_test.go:"))
+
+		// Default %source(%v) and %source(%qv) without custom layout
+		buf.Reset()
+		hDefSrc := logger.NewHandlerWithFormat(buf, &slog.HandlerOptions{AddSource: true}, `%source(%v) %source(%qv)`+"\n")
+		Expect(hDefSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("logger_suite_test.go:"))
+		Expect(buf.String()).To(ContainSubstring(`) "`))
 	})
 })
 

@@ -26,15 +26,15 @@ const (
 	// DefaultFormat is the default log pattern format using colored output.
 	DefaultFormat = "%time(%v) %clr(%level(%-5v)) %source(%clr(%v){magenta} )%msg(%v)%clr(%attr( %k=%v)){faint}%clr(%grp( %g.%attr(%k=%v%nl( )))){faint}"
 	// TextFormat is the standard slog logfmt-style text pattern.
-	TextFormat = `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %agk=%qv))`
+	TextFormat = `%time(%ak=%"2006-01-02T15:04:05.999Z07:00"v )%level(%ak=%av) %source(%ak=%av )%msg(%ak=%qv)%attr( %ak=%qv)%grp(%attr( %.ag=%qv))`
 	// JSONFormat is the standard JSON log format.
-	JSONFormat = `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%qv)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	JSONFormat = `{%time(%qk:%"RFC3339Nano"qv)%level(,%qk:%qv)%source(,%qk:%"json"v)%msg(,%qk:%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// ECSFormat is the Elastic Common Schema (ECS) v1.2.0 JSON log format.
-	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	ECSFormat = `{%time("@timestamp":%"RFC3339"qv,)%level("log.level":%qv,)%msg("message":%qv,)"ecs.version":"1.2.0"%source(,"log.origin":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	// GELFFormat is the Graylog Extended Log Format (GELF) v1.1 JSON format.
-	GELFFormat = `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%q_k:%qv)%grp(%attr(,%q_gk:%qv))}`
+	GELFFormat = `{"version":"1.1",%host("host":%qv)%time(,"timestamp":%"UnixMilli"v)%level(,"level":%"syslog"v)%msg(,"short_message":%qv)%source(,"_source":%qv)%attr(,%_qk:%qv)%grp(%attr(,%_qg:%qv))}`
 	// LogstashFormat is the Logstash JSON event format.
-	LogstashFormat = `{"@version":"1"%time(,"@timestamp":%"RFC3339"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%qv)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
+	LogstashFormat = `{"@version":"1"%time(,"@timestamp":%"RFC3339"qv)%level(,"level":%qv)%msg(,"message":%qv)%source(,"source":%"json"v)%attr(,%qk:%qv)%grp(,%qg:{%attr(%qk:%qv%nl(,))})}`
 	keyTime        = "time"
 	keyLevel       = "level"
 	keyMsg         = "msg"
@@ -423,33 +423,8 @@ type ValueFormatNode struct {
 func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	var s string
 	switch n.target {
-	case "k":
-		s = ctx.currentAttr.Key
-	case "qk":
-		k := ctx.currentAttr.Key
-		if n.prefix != "" {
-			k = n.prefix + k
-		}
-		s = formatJsonString(k)
-	case "ak":
-		k := ctx.currentAttr.Key
-		if n.prefix != "" {
-			k = n.prefix + k
-		}
-		if needsQuoting(k) {
-			s = formatJsonString(k)
-		} else {
-			s = k
-		}
-	case "q_k":
-		s = formatJsonString("_" + ctx.currentAttr.Key)
-	case "a_k":
-		name := "_" + ctx.currentAttr.Key
-		if needsQuoting(name) {
-			s = formatJsonString(name)
-		} else {
-			s = name
-		}
+	case "k", "qk", "ak", ".k", ".qk", ".ak", "_k", "_qk", "_ak", "q_k", "a_k":
+		s = n.renderKey(ctx)
 	case "v":
 		s = n.formatTimeOrValue(ctx, false)
 	case "qv":
@@ -482,78 +457,123 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 		//nolint:errcheck // buffer write cannot fail
 		buf.WriteString(s)
 		return
-	case "g":
-		s = ctx.currentGroup
-	case "qg":
-		if ctx.currentGroup != "" {
-			s = formatJsonString(ctx.currentGroup)
-		}
-	case "ag":
-		if ctx.currentGroup != "" {
-			if needsQuoting(ctx.currentGroup) {
-				s = formatJsonString(ctx.currentGroup)
-			} else {
-				s = ctx.currentGroup
-			}
-		}
-	case "gk":
-		name := ctx.currentAttr.Key
-		if ctx.currentGroup != "" {
-			name = ctx.currentGroup + "." + ctx.currentAttr.Key
-		}
-		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
-			name = n.prefix + name
-		}
-		s = name
-	case "qgk":
-		name := ctx.currentAttr.Key
-		if ctx.currentGroup != "" {
-			name = ctx.currentGroup + "." + ctx.currentAttr.Key
-		}
-		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
-			name = n.prefix + name
-		}
-		s = formatJsonString(name)
-	case "agk":
-		name := ctx.currentAttr.Key
-		if ctx.currentGroup != "" {
-			name = ctx.currentGroup + "." + ctx.currentAttr.Key
-		}
-		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
-			name = n.prefix + name
-		}
-		if needsQuoting(name) {
-			s = formatJsonString(name)
-		} else {
-			s = name
-		}
-	case "q_gk", "q_g_k":
-		name := "_" + ctx.currentAttr.Key
-		if ctx.currentGroup != "" {
-			name = "_" + ctx.currentGroup + "_" + ctx.currentAttr.Key
-		}
-		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
-			name = n.prefix + name
-		}
-		s = formatJsonString(name)
-	case "a_gk", "a_g_k":
-		name := "_" + ctx.currentAttr.Key
-		if ctx.currentGroup != "" {
-			name = "_" + ctx.currentGroup + "_" + ctx.currentAttr.Key
-		}
-		if n.prefix != "" && !strings.HasPrefix(name, n.prefix) {
-			name = n.prefix + name
-		}
-		if needsQuoting(name) {
-			s = formatJsonString(name)
-		} else {
-			s = name
-		}
 	default:
+		s = n.renderGroup(ctx)
 	}
 	s = applyFormatModifier(s, n.minWidth, n.leftAlign, n.hasMax, n.maxWidth, n.truncEnd)
 	//nolint:errcheck // buffer write cannot fail
 	buf.WriteString(s)
+}
+
+// renderKey formats a single attribute or record key with optional prefix and quoting.
+func (n *ValueFormatNode) renderKey(ctx *renderContext) string {
+	k := ctx.currentAttr.Key
+	switch {
+	case strings.Contains(n.target, "."):
+		k = "." + k
+		if n.prefix != "" {
+			if strings.HasSuffix(n.prefix, ".") {
+				k = n.prefix + ctx.currentAttr.Key
+			} else {
+				k = n.prefix + k
+			}
+		}
+	case strings.Contains(n.target, "_"):
+		k = "_" + k
+		if n.prefix != "" {
+			k = n.prefix + k
+		}
+	default:
+		if n.prefix != "" {
+			k = n.prefix + k
+		}
+	}
+
+	switch {
+	case strings.Contains(n.target, "q"):
+		return formatJsonString(k)
+	case strings.Contains(n.target, "a"):
+		if needsQuoting(k) {
+			return formatJsonString(k)
+		}
+		return k
+	default:
+		return k
+	}
+}
+
+// renderGroup formats group names or group-qualified attribute keys with optional prefixes and quoting.
+func (n *ValueFormatNode) renderGroup(ctx *renderContext) string {
+	isDotted := strings.Contains(n.target, ".") || n.target == "gk" || n.target == "qgk" || n.target == "agk"
+	isUnderscore := strings.Contains(n.target, "_")
+
+	var name string
+	if ctx.currentAttr.Key != "" && (isDotted || isUnderscore) {
+		if isDotted {
+			name = ctx.currentAttr.Key
+			if ctx.currentGroup != "" {
+				name = ctx.currentGroup + "." + ctx.currentAttr.Key
+			}
+			if n.prefix != "" {
+				if strings.HasSuffix(n.prefix, ".") {
+					name = n.prefix + name
+				} else {
+					name = n.prefix + "." + name
+				}
+			}
+		} else {
+			name = ctx.currentAttr.Key
+			if ctx.currentGroup != "" {
+				name = ctx.currentGroup + "_" + ctx.currentAttr.Key
+			}
+			name = "_" + name
+			if n.prefix != "" {
+				name = n.prefix + name
+			}
+		}
+	} else {
+		name = ctx.currentGroup
+		if name != "" {
+			switch {
+			case isDotted:
+				if n.prefix != "" {
+					if strings.HasSuffix(n.prefix, ".") {
+						name = n.prefix + name
+					} else {
+						name = n.prefix + "." + name
+					}
+				}
+			case isUnderscore:
+				name = "_" + name
+				if n.prefix != "" {
+					name = n.prefix + name
+				}
+			default:
+				if n.prefix != "" {
+					name = n.prefix + name
+				}
+			}
+		}
+	}
+
+	if name == "" && ctx.currentAttr.Key == "" {
+		return ""
+	}
+
+	isQuoted := strings.Contains(n.target, "q")
+	isAuto := strings.Contains(n.target, "a")
+
+	switch {
+	case isQuoted:
+		return formatJsonString(name)
+	case isAuto:
+		if needsQuoting(name) {
+			return formatJsonString(name)
+		}
+		return name
+	default:
+		return name
+	}
 }
 
 // formatTimeOrValue formats a timestamp or generic attribute value according to the configured layout.
@@ -570,6 +590,8 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 		}
 		var formatted string
 		switch {
+		case ctx.isKey && ctx.currentAttr.Key == slog.SourceKey:
+			formatted = n.formatSource(ctx)
 		case ctx.isKey && ctx.currentAttr.Key == slog.TimeKey:
 			formatted = formatTime(ctx.record.Time, n.timeFormat)
 		case ctx.currentAttr.Value.Kind() == slog.KindTime:
@@ -583,6 +605,30 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 		return formatted
 	}
 	return ctx.formatCurrentValue(quote)
+}
+
+// formatSource formats caller source information according to a custom layout, bypassing ReplaceAttr.
+func (n *ValueFormatNode) formatSource(ctx *renderContext) string {
+	src, ok := ctx.currentAttr.Value.Any().(*slog.Source)
+	if !ok || src == nil {
+		fs := runtime.CallersFrames([]uintptr{ctx.record.PC})
+		f, _ := fs.Next()
+		src = &slog.Source{
+			Function: f.Function,
+			File:     f.File,
+			Line:     f.Line,
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(n.timeFormat)) {
+	case "json":
+		return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
+			formatJsonString(filepath.Base(src.File)),
+			src.Line,
+			formatJsonString(src.Function),
+		)
+	default:
+		return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+	}
 }
 
 // needsQuoting reports whether a key, group, or value string requires quoting in logfmt/text format.
@@ -780,7 +826,7 @@ func hasTimeFormat(node PatternNode) bool {
 	}
 }
 
-var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|a_gk|a_g_k|a_k|agk|qgk|gk|qk|qv|qg|ak|av|ag|k|v|g)`)
+var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(\.qg|\.ag|\.g|\.qk|\.ak|\.k|_qg|_ag|_g|_qk|_ak|_k|q_gk|q_g_k|q_k|a_gk|a_g_k|a_k|q_g|a_g|agk|qgk|gk|qk|qv|qg|ak|av|ag|k|v|g)`)
 
 // matchFormatSpec parses a value or key format placeholder (%[-][min][.[-]max]["layout"]target).
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
@@ -1096,14 +1142,11 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 				return v.String()
 			}
 			if src, ok := v.Any().(*slog.Source); ok {
+				formatted := fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
 				if quote {
-					return fmt.Sprintf(`{"file":{"name":%s,"line":%d},"function":%s}`,
-						formatJsonString(filepath.Base(src.File)),
-						src.Line,
-						formatJsonString(src.Function),
-					)
+					return formatJsonString(formatted)
 				}
-				return fmt.Sprintf("%s(%s:%d)", ReduceFunctionName(src.Function), filepath.Base(src.File), src.Line)
+				return formatted
 			}
 			s := fmt.Sprintf("%+v", v.Any())
 			if quote {
