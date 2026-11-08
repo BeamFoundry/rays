@@ -48,10 +48,10 @@ type LogHandler struct {
 	DEFAULT,
 	JSON,
 	TEXT,
-	CUSTOM,
 	ECS,
 	GELF,
-	LOGSTASH Enum[LogHandler]
+	LOGSTASH,
+	CUSTOM Enum[LogHandler]
 }
 
 // Handler returns a factory function that constructs the slog.Handler corresponding to this LogHandler option.

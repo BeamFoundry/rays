@@ -16,6 +16,7 @@ var (
 	FormatJsonString     = formatJsonString
 	AppendFormattedValue = appendFormattedValue
 	IsTerminal           = isTerminal
+	NeedsQuoting         = needsQuoting
 	SetHostnameFunc      = func(f func() (string, error)) { hostnameFunc = f }
 	SetJsonMarshalFunc   = func(f func(any) ([]byte, error)) { jsonMarshalFunc = f }
 	NewUnknownKeyNode    = func() PatternNode { return &KeyNode{key: "unknown"} }
