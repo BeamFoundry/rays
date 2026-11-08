@@ -1897,7 +1897,11 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	})
 
 	It("covers checkTerminalVT", func() {
-		Expect(logger.CheckTerminalVT(0)).To(BeTrue())
+		if runtime.GOOS == "windows" {
+			Expect(logger.CheckTerminalVT(0)).To(BeFalse())
+		} else {
+			Expect(logger.CheckTerminalVT(0)).To(BeTrue())
+		}
 	})
 
 	It("handles non-nil panics gracefully in appendFormattedValue", func() {
