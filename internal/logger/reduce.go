@@ -47,8 +47,17 @@ func ReduceFunctionName(function string) string {
 	if len(comp) < 2 || comp[0] == "" || comp[1] == "" {
 		return function
 	}
-	pkg := dir + "/" + comp[0]
+
 	obj := comp[1]
+	if strings.HasPrefix(obj, "(*") {
+		if len(obj) < 4 || !strings.HasSuffix(obj, ")") {
+			return function
+		}
+		obj = obj[2 : len(obj)-1]
+	}
+	obj = strings.Replace(obj, "[...]", "", 1)
+
+	pkg := dir + "/" + comp[0]
 	for k, v := range moduleCache {
 		if k == pkg {
 			pkg = v
@@ -58,14 +67,6 @@ func ReduceFunctionName(function string) string {
 			}
 		}
 	}
-
-	if strings.HasPrefix(obj, "(*") {
-		if len(obj) < 4 || !strings.HasSuffix(obj, ")") {
-			return function
-		}
-		obj = obj[2 : len(obj)-1]
-	}
-	obj = strings.Replace(obj, "[...]", "", 1)
 
 	ret := pkg + "." + obj
 	functionCache[function] = ret
