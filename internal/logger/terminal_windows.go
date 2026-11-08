@@ -4,6 +4,7 @@ package logger
 
 import "golang.org/x/sys/windows"
 
+// checkTerminalVT verifies and enables virtual terminal processing on Windows console handles.
 func checkTerminalVT(fd int) bool {
 	var mode uint32
 	h := windows.Handle(fd)

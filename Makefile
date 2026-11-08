@@ -1,23 +1,17 @@
 .PHONY: all
 all: test
 
-.PHONY: generate
-generate:
-	go generate ./...
-
 .PHONY: fmt
 fmt:
-	go fmt ./...
-
-.PHONY: vet
-vet:
 	go vet ./...
-
+	go fix ./...
+	go fmt ./...
 
 .PHONY: clean
 clean:
 	rm -f coverprofile.out
 
 .PHONY: test
-test: generate fmt vet
+test: fmt
+	golangci-lint run ./...
 	ginkgo run -cover ./...

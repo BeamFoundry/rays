@@ -42,11 +42,13 @@ const (
 	ansiReset      = "\033[0m"
 )
 
+// collectedAttr represents a flattened log attribute along with its group path segments.
 type collectedAttr struct {
 	attr   slog.Attr
 	groups []string
 }
 
+// groupInfo represents a logging group containing its formatted name, attributes, and child groups.
 type groupInfo struct {
 	name     string
 	attrs    []slog.Attr
@@ -56,6 +58,7 @@ type groupInfo struct {
 var (
 	emitterIdentityMu sync.RWMutex
 	emitterIdentity   string
+	hostnameFunc      = os.Hostname
 )
 
 // SetEmitterIdentity sets the emitter identity (hostname) used in log formats like GELF.
@@ -73,7 +76,7 @@ func GetEmitterIdentity() string {
 	if id != "" {
 		return id
 	}
-	if h, err := os.Hostname(); err == nil && h != "" {
+	if h, err := hostnameFunc(); err == nil && h != "" {
 		return h
 	}
 	return "localhost"
@@ -89,6 +92,7 @@ type LiteralNode struct {
 	text string
 }
 
+// Render writes literal static text to the output buffer.
 func (n *LiteralNode) Render(_ *renderContext, buf *Buffer) {
 	//nolint:errcheck // buffer write cannot fail
 	buf.WriteString(n.text)
@@ -99,6 +103,7 @@ type CompositeNode struct {
 	nodes []PatternNode
 }
 
+// Render evaluates and writes all child pattern nodes sequentially to the output buffer.
 func (n *CompositeNode) Render(ctx *renderContext, buf *Buffer) {
 	for _, child := range n.nodes {
 		child.Render(ctx, buf)
@@ -115,6 +120,7 @@ type ColorNode struct {
 	hasLevelInner bool
 }
 
+// newColorNode creates a ColorNode wrapping an inner pattern node with parsed ANSI styles.
 func newColorNode(inner PatternNode, spec string) *ColorNode {
 	n := &ColorNode{
 		inner:         inner,
@@ -124,6 +130,7 @@ func newColorNode(inner PatternNode, spec string) *ColorNode {
 	return n
 }
 
+// parseSpec parses a color style specification string into foreground colors and text mode codes.
 func (n *ColorNode) parseSpec(spec string) {
 	trimmed := strings.TrimSpace(spec)
 	if trimmed == "" {
@@ -182,6 +189,7 @@ func (n *ColorNode) parseSpec(spec string) {
 	n.buildCodes(finalModes, colorCode)
 }
 
+// buildCodes resolves ANSI escape codes for the specified color and style modes.
 func (n *ColorNode) buildCodes(modes []int, colorCode int) {
 	if n.hasColor {
 		n.staticCode = buildAnsiCode(modes, colorCode)
@@ -198,6 +206,7 @@ func (n *ColorNode) buildCodes(modes []int, colorCode int) {
 	}
 }
 
+// Render evaluates the inner pattern node wrapped in ANSI escape codes if color is enabled.
 func (n *ColorNode) Render(ctx *renderContext, buf *Buffer) {
 	if !ctx.isColor {
 		n.inner.Render(ctx, buf)
@@ -223,6 +232,7 @@ func (n *ColorNode) Render(ctx *renderContext, buf *Buffer) {
 	buf.WriteString(endCode)
 }
 
+// ansiCodes returns the ANSI escape sequence for the given record level and styling.
 func (n *ColorNode) ansiCodes(ctx *renderContext) (startCode, endCode string) {
 	if !n.isValid {
 		return "", ""
@@ -244,6 +254,7 @@ type KeyNode struct {
 	key   string
 }
 
+// Render binds the current record field or attribute key and evaluates the inner pattern node.
 func (n *KeyNode) Render(ctx *renderContext, buf *Buffer) {
 	if n.key == keySource && !ctx.addSource {
 		return
@@ -305,6 +316,7 @@ type AttrNode struct {
 	inner PatternNode
 }
 
+// Render iterates over collected attributes, formatting each attribute with the inner pattern.
 func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 	if ctx.inGroup {
 		attrs := ctx.groupAttrs
@@ -336,6 +348,8 @@ func (n *AttrNode) Render(ctx *renderContext, buf *Buffer) {
 	}
 }
 
+// renderChildGroupsJSON renders nested child groups as a JSON object structure.
+//
 //nolint:errcheck,revive // buffer write cannot fail; helper for child group JSON rendering
 func renderChildGroupsJSON(buf *Buffer, children []groupInfo, hasPriorAttrs bool) {
 	for i, child := range children {
@@ -365,6 +379,7 @@ type GroupNode struct {
 	inner PatternNode
 }
 
+// Render formats structured groups using the inner pattern or nested JSON/GELF structures.
 func (n *GroupNode) Render(ctx *renderContext, buf *Buffer) {
 	groups := ctx.groups
 	for i, grp := range groups {
@@ -383,6 +398,7 @@ type NotLastNode struct {
 	text string
 }
 
+// Render writes separator text if the current element is not the last one in an iteration.
 func (n *NotLastNode) Render(ctx *renderContext, buf *Buffer) {
 	if !ctx.isLast {
 		//nolint:errcheck // buffer write cannot fail
@@ -402,6 +418,7 @@ type ValueFormatNode struct {
 	truncEnd   bool
 }
 
+// Render formats attribute keys, values, or group names applying padding, truncation, or alignment.
 func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	var s string
 	switch n.target {
@@ -445,6 +462,8 @@ func (n *ValueFormatNode) Render(ctx *renderContext, buf *Buffer) {
 	buf.WriteString(s)
 }
 
+// formatTimeOrValue formats a timestamp or generic attribute value according to the configured layout.
+//
 //nolint:revive // quote flag differentiates between %v and %qv
 func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) string {
 	if n.timeFormat != "" {
@@ -478,6 +497,7 @@ func (n *ValueFormatNode) formatTimeOrValue(ctx *renderContext, quote bool) stri
 	return formatted
 }
 
+// formatUnixFractional formats seconds and sub-second nanoseconds as a signed decimal fraction.
 func formatUnixFractional(t time.Time, decimals int) string {
 	sec := t.Unix()
 	nsec := int64(t.Nanosecond())
@@ -512,6 +532,7 @@ func formatUnixFractional(t time.Time, decimals int) string {
 	return fmt.Sprintf("-%d.%0*d", wholeSec, decimals, frac)
 }
 
+// syslogSeverity maps a slog.Level to its corresponding numeric RFC 5424 syslog severity.
 func syslogSeverity(level slog.Level) int {
 	switch {
 	case level >= LevelFatal:
@@ -529,6 +550,7 @@ func syslogSeverity(level slog.Level) int {
 	}
 }
 
+// formatTime formats a time instant using standard or predefined epoch layouts.
 func formatTime(t time.Time, layout string) string {
 	switch strings.ToLower(strings.TrimSpace(layout)) {
 	case "unix":
@@ -580,11 +602,13 @@ func formatTime(t time.Time, layout string) string {
 	}
 }
 
+// compiledPattern holds the root AST node and metadata flags of a parsed pattern.
 type compiledPattern struct {
 	root         PatternNode
 	hasGrpInTree bool
 }
 
+// compilePattern parses a pattern string into an AST and inspects its structural features.
 func compilePattern(format string) *compiledPattern {
 	root := parsePattern(format)
 	return &compiledPattern{
@@ -593,6 +617,7 @@ func compilePattern(format string) *compiledPattern {
 	}
 }
 
+// hasGroupNode reports whether the AST contains any %grp node.
 func hasGroupNode(node PatternNode) bool {
 	switch n := node.(type) {
 	case *GroupNode:
@@ -610,6 +635,7 @@ func hasGroupNode(node PatternNode) bool {
 	}
 }
 
+// hasLevelNode reports whether the AST contains any %level node.
 func hasLevelNode(node PatternNode) bool {
 	if node == nil {
 		return false
@@ -633,6 +659,7 @@ func hasLevelNode(node PatternNode) bool {
 	}
 }
 
+// hasTimeFormat reports whether the AST contains a custom time layout specifier.
 func hasTimeFormat(node PatternNode) bool {
 	switch n := node.(type) {
 	case *ValueFormatNode:
@@ -654,6 +681,7 @@ func hasTimeFormat(node PatternNode) bool {
 
 var formatSpecRegex = regexp.MustCompile(`^%(?:"([^"]*)")?(-)?(\d+)?(?:\.(-)?(\d+))?(?:"([^"]*)")?(q_gk|q_g_k|q_k|qk|qv|qg|k|v|g)`)
 
+// matchFormatSpec parses a value or key format placeholder (%[-][min][.[-]max]["layout"]target).
 func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 	m := formatSpecRegex.FindStringSubmatch(s)
 	if m == nil {
@@ -697,6 +725,7 @@ func matchFormatSpec(s string) (*ValueFormatNode, int, bool) {
 	}, matchedLen, true
 }
 
+// matchKeyPrefix matches a known field placeholder prefix such as %time( or %level(.
 func matchKeyPrefix(s string) (key string, prefixLen int, ok bool) {
 	prefixes := []struct {
 		prefix string
@@ -721,6 +750,7 @@ func matchKeyPrefix(s string) (key string, prefixLen int, ok bool) {
 	return "", 0, false
 }
 
+// isQuotedLayoutStart reports whether a double quote marks the start of a format layout specifier.
 func isQuotedLayoutStart(s string, quoteIdx int) bool {
 	if quoteIdx == 0 || s[quoteIdx] != '"' {
 		return false
@@ -739,6 +769,7 @@ func isQuotedLayoutStart(s string, quoteIdx int) bool {
 	return false
 }
 
+// findMatchingParen scans for the matching closing parenthesis while respecting quoted layouts.
 func findMatchingParen(s string, openParenIdx int) (int, bool) {
 	if openParenIdx >= len(s) || s[openParenIdx] != '(' {
 		return -1, false
@@ -775,6 +806,7 @@ func findMatchingParen(s string, openParenIdx int) (int, bool) {
 	return -1, false
 }
 
+// parsePattern parses a format string into a tree of PatternNodes.
 func parsePattern(format string) PatternNode {
 	var nodes []PatternNode
 	i := 0
@@ -874,6 +906,7 @@ func parsePattern(format string) PatternNode {
 	return &CompositeNode{nodes: nodes}
 }
 
+// renderContext holds runtime rendering state and metadata for evaluating pattern ASTs.
 type renderContext struct {
 	currentAttr   slog.Attr
 	rep           func(groups []string, a slog.Attr) slog.Attr
@@ -894,6 +927,8 @@ type renderContext struct {
 	isGELF        bool
 }
 
+// formatCurrentValue formats the current attribute or record value as text or JSON.
+//
 //nolint:revive // quote flag is required to differentiate between %v and %qv
 func (ctx *renderContext) formatCurrentValue(quote bool) string {
 	if ctx.isGELF && ctx.currentAttr.Value.Kind() == slog.KindBool {
@@ -986,6 +1021,8 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 	return formatValue(ctx.currentAttr.Value, quote)
 }
 
+// applyFormatModifier applies minimum width, maximum width, alignment, and truncation to a string.
+//
 //nolint:revive // boolean flags control left alignment, maximum length, and truncation direction
 func applyFormatModifier(s string, minWidth int, leftAlign, hasMax bool, maxWidth int, truncEnd bool) string {
 	runes := []rune(s)
@@ -1008,19 +1045,24 @@ func applyFormatModifier(s string, minWidth int, leftAlign, hasMax bool, maxWidt
 	return s
 }
 
+var jsonMarshalFunc = json.Marshal
+
+// formatJsonString escapes and quotes a string for JSON output.
 func formatJsonString(s string) string {
-	b, err := json.Marshal(s)
+	b, err := jsonMarshalFunc(s)
 	if err == nil {
 		return string(b)
 	}
 	return strconv.Quote(s)
 }
 
+// appendJsonString appends an escaped, quoted string to the buffer.
 func appendJsonString(buf *Buffer, s string) {
 	//nolint:errcheck // buffer write cannot fail
 	buf.WriteString(formatJsonString(s))
 }
 
+// formatValue formats an arbitrary slog.Value into a string representation.
 func formatValue(v slog.Value, quote bool) string {
 	buf := NewBuffer()
 	defer buf.Free()
@@ -1028,6 +1070,8 @@ func formatValue(v slog.Value, quote bool) string {
 	return string(*buf)
 }
 
+// appendFormattedValue renders a structured value into the buffer in JSON or text format.
+//
 //nolint:revive // quote controls whether values like strings are quoted
 func appendFormattedValue(buf *Buffer, v slog.Value, quote bool) {
 	switch v.Kind() {
@@ -1165,6 +1209,7 @@ var colorCodes = map[string]int{
 	"bright_white":   97,
 }
 
+// levelColorCode returns the default ANSI foreground color code for a given log level.
 func levelColorCode(level slog.Level) int {
 	switch {
 	case level >= LevelError:
@@ -1180,6 +1225,8 @@ func levelColorCode(level slog.Level) int {
 	}
 }
 
+// buildAnsiCode constructs an ANSI escape sequence string from text modes and color code.
+//
 //nolint:errcheck // strings.Builder write cannot fail
 func buildAnsiCode(modes []int, color int) string {
 	if len(modes) == 0 && color <= 0 {
@@ -1203,6 +1250,7 @@ func buildAnsiCode(modes []int, color int) string {
 	return sb.String()
 }
 
+// isTerminal reports whether the output writer is an ANSI-capable terminal based on environment and writer capabilities.
 func isTerminal(w io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false

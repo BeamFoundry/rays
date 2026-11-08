@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1348,7 +1349,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		clone2 := base.WithGroup("grp")
 
 		var wg sync.WaitGroup
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			wg.Add(2)
 			go func() {
 				defer GinkgoRecover()
@@ -1368,7 +1369,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	It("synchronizes SetFormat, SetColor, and Handle concurrently without race", func() {
 		h := logger.NewHandler(buf, nil)
 		var wg sync.WaitGroup
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			wg.Add(3)
 			go func() {
 				defer wg.Done()
@@ -1710,6 +1711,200 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
 		Expect(js["host"]).To(Equal("custom-service-host"))
 	})
+
+	It("evaluates IsColor on handler when color setting is unset", func() {
+		h := logger.NewHandler(buf, nil)
+		_ = h.IsColor()
+	})
+
+	It("merges multiple attributes in the same group in GELF format", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
+		r := slog.Record{Message: "gelf group test"}
+		r.Add(slog.Group("my_group", slog.String("a", "1"), slog.String("b", "2"), slog.Bool("flag", false)))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["_my_group_a"]).To(Equal("1"))
+		Expect(js["_my_group_b"]).To(Equal("2"))
+		Expect(js["_my_group_flag"]).To(Equal(float64(0)))
+	})
+
+	It("handles edge cases in cleanJsonCommas", func() {
+		bShort := logger.NewBuffer()
+		_, err := bShort.WriteString("x")
+		Expect(err).NotTo(HaveOccurred())
+		logger.CleanJsonCommas(bShort)
+		Expect(bShort.String()).To(Equal("x"))
+
+		bWS := logger.NewBuffer()
+		_, err = bWS.WriteString("{\n  \"a\": 1, \n}")
+		Expect(err).NotTo(HaveOccurred())
+		logger.CleanJsonCommas(bWS)
+		Expect(bWS.String()).To(Equal("{\n  \"a\": 1 \n}"))
+	})
+
+	It("falls back to localhost when hostname lookup fails", func() {
+		logger.SetHostnameFunc(func() (string, error) { return "", errors.New("hostname failed") })
+		defer logger.SetHostnameFunc(os.Hostname)
+		Expect(logger.GetEmitterIdentity()).To(Equal("localhost"))
+	})
+
+	It("handles unknown KeyNode key safely", func() {
+		node := logger.NewUnknownKeyNode()
+		b := logger.NewBuffer()
+		node.Render(logger.NewRenderContext(), b)
+		Expect(b.Len()).To(Equal(0))
+	})
+
+	It("renders grouped attributes in topAttrs when pattern lacks group directive", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, "%attr(%k=%v)\n")
+		r := slog.Record{Message: "no grp directive"}
+		r.Add(slog.Group("env", slog.String("mode", "prod")))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal("mode=prod\n"))
+	})
+
+	It("renders deep nested groups and multiple child groups in JSON format", func() {
+		h := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		h.SetColor(false)
+		r := slog.Record{Message: "deep nested"}
+		r.Add(slog.Group("top",
+			slog.Group("c1",
+				slog.String("x", "1"),
+				slog.String("y", "2"),
+				slog.Group("sub", slog.String("z", "3")),
+			),
+			slog.Group("c2", slog.String("w", "4")),
+		))
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		top, ok := js["top"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		c1, ok := top["c1"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(c1["x"]).To(Equal("1"))
+		Expect(c1["y"]).To(Equal("2"))
+		sub, ok := c1["sub"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(sub["z"]).To(Equal("3"))
+		c2, ok := top["c2"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(c2["w"]).To(Equal("4"))
+	})
+
+	It("supports prefixes in %qk and %q_gk format specifiers", func() {
+		buf.Reset()
+		hQk := logger.NewHandlerWithFormat(buf, nil, `[%attr(%"pfx_"qk=%v)]`)
+		r := slog.Record{Message: "prefix test"}
+		r.Add(slog.String("k1", "v1"))
+		Expect(hQk.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal(`["pfx_k1"=v1]` + "\n"))
+
+		buf.Reset()
+		hQgk := logger.NewHandlerWithFormat(buf, nil, `[%attr(%"custom"q_gk=%v)]`)
+		Expect(hQgk.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(Equal(`["custom_k1"=v1]` + "\n"))
+	})
+
+	It("handles unknown ValueFormatNode target safely", func() {
+		node := logger.NewUnknownValueNode()
+		b := logger.NewBuffer()
+		node.Render(logger.NewRenderContext(), b)
+		Expect(b.Len()).To(Equal(0))
+	})
+
+	It("uses record level in GELF syslog severity when level attribute is replaced by string", func() {
+		opts := &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.LevelKey {
+					return slog.String("level", "WARN")
+				}
+				return a
+			},
+		}
+		h := logger.NewHandlerWithFormat(buf, opts, logger.GELFFormat)
+		r := slog.Record{Level: slog.LevelWarn, Message: "warn test"}
+		Expect(h.Handle(context.Background(), r)).To(Succeed())
+		var js map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &js)).To(Succeed())
+		Expect(js["level"]).To(Equal(float64(4)))
+	})
+
+	It("formats negative seconds with zero nanoseconds in formatUnixFractional", func() {
+		tNegZero := time.Unix(-5, 0).UTC()
+		Expect(logger.FormatUnixFractional(tNegZero, 3)).To(Equal("-5.000"))
+	})
+
+	It("maps all severity levels in syslogSeverity", func() {
+		Expect(logger.SyslogSeverity(logger.LevelFatal)).To(Equal(2))
+		Expect(logger.SyslogSeverity(slog.LevelError)).To(Equal(3))
+		Expect(logger.SyslogSeverity(slog.LevelWarn)).To(Equal(4))
+		Expect(logger.SyslogSeverity(slog.LevelInfo)).To(Equal(6))
+		Expect(logger.SyslogSeverity(logger.LevelTrace)).To(Equal(7))
+		Expect(logger.SyslogSeverity(slog.Level(-10))).To(Equal(7))
+	})
+
+	It("returns false for hasLevelNode(nil)", func() {
+		Expect(logger.HasLevelNode(nil)).To(BeFalse())
+	})
+
+	It("validates isQuotedLayoutStart conditions", func() {
+		Expect(logger.IsQuotedLayoutStart("foo", 0)).To(BeFalse())
+		Expect(logger.IsQuotedLayoutStart("foo", 1)).To(BeFalse())
+	})
+
+	It("handles edge cases in findMatchingParen", func() {
+		_, ok := logger.FindMatchingParen("abc", 5)
+		Expect(ok).To(BeFalse())
+		_, ok2 := logger.FindMatchingParen("abc", 0)
+		Expect(ok2).To(BeFalse())
+
+		// Escaped characters inside quoted layout
+		idx, ok3 := logger.FindMatchingParen(`%time(%"2006\"01\"02"v)`, 5)
+		Expect(ok3).To(BeTrue())
+		Expect(idx).To(Equal(22))
+	})
+
+	It("falls back to strconv.Quote in formatJsonString if JSON marshaling fails", func() {
+		logger.SetJsonMarshalFunc(func(any) ([]byte, error) { return nil, errors.New("marshal error") })
+		defer logger.SetJsonMarshalFunc(json.Marshal)
+		Expect(logger.FormatJsonString("test")).To(Equal(`"test"`))
+	})
+
+	It("handles nil pointer panics gracefully in appendFormattedValue", func() {
+		b := logger.NewBuffer()
+		var src *slog.Source
+		logger.AppendFormattedValue(b, slog.AnyValue(src), true)
+		Expect(b.String()).To(Equal("null"))
+
+		b.Reset()
+		logger.AppendFormattedValue(b, slog.AnyValue(src), false)
+		Expect(b.String()).To(Equal("<nil>"))
+	})
+
+	It("handles slog.GroupValue in appendFormattedValue default case", func() {
+		b := logger.NewBuffer()
+		logger.AppendFormattedValue(b, slog.GroupValue(), false)
+		Expect(b.Len()).To(Equal(0))
+	})
+
+	It("checks isTerminal with --no-color=true flag in os.Args", func() {
+		origArgs := os.Args
+		os.Args = append(slices.Clone(origArgs), "--no-color=true")
+		defer func() { os.Args = origArgs }()
+		Expect(logger.IsTerminal(buf)).To(BeFalse())
+	})
+
+	It("covers checkTerminalVT", func() {
+		Expect(logger.CheckTerminalVT(0)).To(BeTrue())
+	})
+
+	It("handles non-nil panics gracefully in appendFormattedValue", func() {
+		b := logger.NewBuffer()
+		logger.AppendFormattedValue(b, slog.AnyValue(NonNilPanicker{}), true)
+		Expect(b.String()).To(ContainSubstring("!PANIC: boom"))
+	})
 })
 
 type ErrorTextMarshaler struct{}
@@ -1724,4 +1919,24 @@ type CustomJSONType struct {
 
 func (c *CustomJSONType) MarshalJSON() ([]byte, error) {
 	return []byte(`{"custom":"` + c.Name + `"}`), nil
+}
+
+type NilPointerPanicker struct{}
+
+func (n *NilPointerPanicker) MarshalJSON() ([]byte, error) {
+	_ = *n
+	return []byte("{}"), nil
+}
+
+type NilStringPanicker struct{}
+
+func (n *NilStringPanicker) String() string {
+	_ = *n
+	return ""
+}
+
+type NonNilPanicker struct{}
+
+func (n NonNilPanicker) MarshalText() ([]byte, error) {
+	panic("boom")
 }

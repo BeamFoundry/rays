@@ -98,6 +98,7 @@ func (this *Handler) IsColor() bool {
 	return isTerminal(this.w)
 }
 
+// clone returns a copy of the Handler sharing the original writer mutex.
 func (this *Handler) clone() *Handler {
 	this.cfgMu.RLock()
 	defer this.cfgMu.RUnlock()
@@ -231,6 +232,7 @@ func (this *Handler) WithGroup(name string) slog.Handler {
 	return h2
 }
 
+// collectAttrRecursive flattens nested slog attributes and groups into a slice of collectedAttr.
 func collectAttrRecursive(all *[]collectedAttr, attr slog.Attr, groups []string, rep func([]string, slog.Attr) slog.Attr) {
 	attr.Value = attr.Value.Resolve()
 	if rep != nil && attr.Value.Kind() != slog.KindGroup {
@@ -262,6 +264,7 @@ func collectAttrRecursive(all *[]collectedAttr, attr slog.Attr, groups []string,
 	})
 }
 
+// groupFormatMode defines how attribute groups are structured and formatted in output.
 type groupFormatMode int
 
 const (
@@ -270,6 +273,7 @@ const (
 	groupModeGELF
 )
 
+// buildGroupInfos organizes collected attributes and group hierarchy into groupInfo structures according to mode.
 func buildGroupInfos(allAttrs []collectedAttr, mode groupFormatMode) []groupInfo {
 	if mode == groupModeGELF {
 		groupMap := make(map[string]int)
@@ -312,6 +316,7 @@ func buildGroupInfos(allAttrs []collectedAttr, mode groupFormatMode) []groupInfo
 	return groups
 }
 
+// buildNestedGroupTree constructs a hierarchical tree of nested groups for JSON-formatted output.
 func buildNestedGroupTree(allAttrs []collectedAttr) []groupInfo {
 	type gNode struct {
 		name     string
@@ -363,6 +368,7 @@ func buildNestedGroupTree(allAttrs []collectedAttr) []groupInfo {
 	return res
 }
 
+// cleanJsonCommas removes doubled or trailing commas from rendered JSON buffers after omitted fields.
 func cleanJsonCommas(buf *Buffer) {
 	b := *buf
 	if len(b) < 2 || b[0] != '{' {
@@ -425,6 +431,8 @@ func cleanJsonCommas(buf *Buffer) {
 	buf.Write(out)
 }
 
+// appendString writes a string to the buffer, escaping and quoting it if quote is true.
+//
 //nolint:errcheck,revive //ignoring buffer write.
 func appendString(buf *Buffer, s string, quote bool) {
 	if quote {
@@ -434,6 +442,8 @@ func appendString(buf *Buffer, s string, quote bool) {
 	}
 }
 
+// appendSource formats and appends caller source code location (file and line) to the buffer.
+//
 //nolint:errcheck //ignoring buffer write.
 func appendSource(buf *Buffer, src *slog.Source) {
 	dir, file := filepath.Split(src.File)
