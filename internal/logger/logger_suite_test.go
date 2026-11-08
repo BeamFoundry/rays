@@ -2397,6 +2397,9 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	It("JSON-encodes maps, structs, and slices as strings in GELFFormat additional fields", func() {
 		h := logger.NewHandlerWithFormat(buf, nil, logger.GELFFormat)
 		r := slog.Record{Time: testTime, Message: "gelf complex values"}
+		var nilPtr *CustomJSONType
+		var nilSrc *slog.Source
+		var nilPanic *NilTextPanicker
 		r.Add(
 			slog.Any("meta_map", map[string]string{"env": "staging"}),
 			slog.Any("meta_slice", []string{"alpha", "beta"}),
@@ -2404,6 +2407,10 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 			slog.String("plain_str", "hello"),
 			slog.Int("count", 42),
 			slog.Float64("score", 98.5),
+			slog.Any("nil_untyped", nil),
+			slog.Any("nil_ptr", nilPtr),
+			slog.Any("nil_source", nilSrc),
+			slog.Any("nil_panic", nilPanic),
 		)
 		Expect(h.Handle(context.Background(), r)).To(Succeed())
 
@@ -2415,6 +2422,21 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		Expect(js["_plain_str"]).To(Equal("hello"))
 		Expect(js["_count"]).To(BeEquivalentTo(42))
 		Expect(js["_score"]).To(BeNumerically("~", 98.5, 0.001))
+		Expect(js["_nil_untyped"]).To(Equal("null"))
+		Expect(js["_nil_ptr"]).To(Equal("null"))
+		Expect(js["_nil_source"]).To(Equal("null"))
+		Expect(js["_nil_panic"]).To(Equal("null"))
+
+		// Preserves JSON null outside GELF
+		buf.Reset()
+		hJSON := logger.NewHandlerWithFormat(buf, nil, logger.JSONFormat)
+		Expect(hJSON.Handle(context.Background(), r)).To(Succeed())
+		var jsJSON map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsJSON)).To(Succeed())
+		Expect(jsJSON["nil_untyped"]).To(BeNil())
+		Expect(jsJSON["nil_ptr"]).To(BeNil())
+		Expect(jsJSON["nil_source"]).To(BeNil())
+		Expect(jsJSON["nil_panic"]).To(BeNil())
 	})
 
 	It("returns dotless or malformed function name unchanged in ReduceFunctionName without panicking", func() {
@@ -2488,6 +2510,10 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		b := logger.NewBuffer()
 		logger.AppendFormattedValue(b, slog.AnyValue(nilSrc), true)
 		Expect(b.String()).To(Equal("null"))
+
+		b.Reset()
+		logger.AppendFormattedValue(b, slog.AnyValue(nilSrc), true, true)
+		Expect(b.String()).To(Equal(`"null"`))
 
 		b.Reset()
 		logger.AppendFormattedValue(b, slog.AnyValue(nilSrc), false)
@@ -2814,6 +2840,10 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		var p *NilTextPanicker
 		logger.AppendFormattedValue(b, slog.AnyValue(p), true)
 		Expect(b.String()).To(Equal("null"))
+
+		b.Reset()
+		logger.AppendFormattedValue(b, slog.AnyValue(p), true, true)
+		Expect(b.String()).To(Equal(`"null"`))
 
 		b.Reset()
 		logger.AppendFormattedValue(b, slog.AnyValue(p), false)
