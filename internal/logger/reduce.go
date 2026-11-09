@@ -59,7 +59,19 @@ func ReduceFunctionName(function string) string {
 		}
 	}
 	if len(comp) == 0 {
-		comp = strings.SplitN(base, ".", 3)
+		if bStart := strings.Index(base, "["); bStart != -1 && !strings.Contains(base, "(*") {
+			bEnd := strings.LastIndex(base, "]")
+			dotIdx := strings.LastIndex(base[:bStart], ".")
+			if bEnd > bStart && dotIdx != -1 && dotIdx+1 < bStart {
+				pkgPart := base[:dotIdx]
+				recv := base[dotIdx+1 : bEnd+1]
+				method := strings.TrimPrefix(base[bEnd+1:], ".")
+				comp = []string{pkgPart, recv, method}
+			}
+		}
+		if len(comp) == 0 {
+			comp = strings.SplitN(base, ".", 3)
+		}
 	}
 
 	if len(comp) < 2 || comp[0] == "" || comp[1] == "" {
