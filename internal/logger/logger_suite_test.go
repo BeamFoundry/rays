@@ -2526,6 +2526,29 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hTextGeneric := logger.NewHandlerWithFormat(buf, optsGenericSrc, logger.TextFormat)
 		Expect(hTextGeneric.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pkg.Box(server.go:42)"))
+
+		// Generic value receiver method reduction
+		Expect(logger.ReduceFunctionName("pkg.Box[...].Get")).To(Equal("pkg.Box"))
+		Expect(logger.ReduceFunctionName("github.com/BeamFoundry/rays/pkg.Box[...].Get")).To(Equal("g/B/rays/pkg.Box"))
+
+		// Text rendering of generic value receiver method preserves method name and reduces correctly
+		buf.Reset()
+		optsGenericValSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, &slog.Source{
+						Function: "pkg.Box[...].Get",
+						File:     "server.go",
+						Line:     42,
+					})
+				}
+				return a
+			},
+		}
+		hTextGenericVal := logger.NewHandlerWithFormat(buf, optsGenericValSrc, logger.TextFormat)
+		Expect(hTextGenericVal.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pkg.Box(server.go:42)"))
 	})
 
 	It("bounds functionCache so distinct valid names cannot accumulate without limit", func() {
