@@ -24,6 +24,7 @@ var (
 		cachedHostname = ""
 	}
 	SetJsonMarshalFunc  = func(f func(any) ([]byte, error)) { jsonMarshalFunc = f }
+	CloneOptions        = func(l *Logger) *slog.HandlerOptions { return l.cloneOptions() }
 	NewUnknownKeyNode   = func() PatternNode { return &KeyNode{key: "unknown"} }
 	NewUnknownValueNode = func() PatternNode { return &ValueFormatNode{target: "unknown"} }
 	NewRenderContext    = func() *renderContext {
