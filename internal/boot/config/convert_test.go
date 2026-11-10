@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	. "github.com/BeamFoundry/rays/internal/config"
+	. "github.com/BeamFoundry/rays/internal/boot/config"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
@@ -39,22 +39,22 @@ func (this *Registry) AddBeamFor(ptr any) (Beam, Error) {
 	if field := FindFieldForInterface[Stereotype](reflectType); field != nil {
 		bpi := reflect.TypeFor[BeamProvider]()
 		if bp, ok := this.providers[field.Type]; ok {
-			logger.GetLogger().Trace("Cached provider", "stereotype", field.Type.Name(), "provider", bp)
+			services.Get().Logger.Trace("Cached provider", "stereotype", field.Type.Name(), "provider", bp)
 			if provider, ok := reflect.New(bp.Elem()).Interface().(BeamProvider); ok {
 				return this.registerProvider(reflectType, provider)
 			}
 		}
 		if providers := FindTypesImplementingInterface(bpi, field.Type); len(providers) == 1 {
 			if provider, ok := reflect.New(providers[0].Elem()).Interface().(BeamProvider); ok {
-				logger.GetLogger().Trace("Found a provider", "stereotype", field.Type.Name(), "provider", providers[0])
+				services.Get().Logger.Trace("Found a provider", "stereotype", field.Type.Name(), "provider", providers[0])
 				this.providers[field.Type] = providers[0]
 				return this.registerProvider(reflectType, provider)
 			}
 		} else {
-			logger.GetLogger().Trace("Provider not found", "type", field.Type.Name(), "reflectType", reflectType, "len", len(providers))
+			services.Get().Logger.Trace("Provider not found", "type", field.Type.Name(), "reflectType", reflectType, "len", len(providers))
 		}
 	} else {
-		logger.GetLogger().Trace("No stereotype found", "reflectType", reflectType)
+		services.Get().Logger.Trace("No stereotype found", "reflectType", reflectType)
 	}
 	builder, err := NewBeamBuilder(ptr)
 	if err != nil {
@@ -81,7 +81,7 @@ func (this *Registry) CreateBeam(beam Beam) Error {
 			return NewError("InvalidBeamError", "Child beam and parent not yet initialized")
 		} else if beam.Type() != beam.AnnotatedType() {
 			for field := range beam.AnnotatedType().Elem().Fields() {
-				logger.GetLogger().Trace("Annotated: Evaluating field to inject", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
+				services.Get().Logger.Trace("Annotated: Evaluating field to inject", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
 				// TODO: Add parent type to call (instead of recurse)
 				if !this.isFieldInjectable(&field, true) {
 					return NewError("InvalidBeamError", "Annotated Beam not injectable", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
@@ -95,7 +95,7 @@ func (this *Registry) CreateBeam(beam Beam) Error {
 			return err
 		}
 
-		logger.GetLogger().Debug("Beam instance creation returned a nil pointer, removing beam", "qualifier", beam.Attributes()[QualifierAttribute])
+		services.Get().Logger.Debug("Beam instance creation returned a nil pointer, removing beam", "qualifier", beam.Attributes()[QualifierAttribute])
 		this.unregisterBeam(beam)
 	}
 	return nil
@@ -367,10 +367,10 @@ func (this *Registry) InjectBeam(beam Beam) Error {
 	}
 	if beam.Type().Kind() == reflect.Pointer && beam.Type().Elem().Kind() == reflect.Struct {
 		for field := range beam.Type().Elem().Fields() {
-			logger.GetLogger().Trace("Evaluating field to inject", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
+			services.Get().Logger.Trace("Evaluating field to inject", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
 			// TODO: Add parent type to call (instead of recurse)
 			if !this.isFieldInjectable(&field, true) {
-				logger.GetLogger().Trace("Beam not injectable", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
+				services.Get().Logger.Trace("Beam not injectable", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
 				return NewError("InvalidBeamError", "Beam not injectable", "field.Name", field.Name, "beam", beam.Attributes()[QualifierAttribute])
 			}
 		}
@@ -456,7 +456,7 @@ func (this *Registry) isFieldInjectable(field *reflect.StructField, recurse bool
 	}
 	if beams, err := this.FindBeamsForStructField(field); err != nil {
 		if err.Name() == "InvalidParameter" {
-			logger.GetLogger().Trace("Field is not meant to be injected")
+			services.Get().Logger.Trace("Field is not meant to be injected")
 			return true
 		}
 		err.LogError()
@@ -464,7 +464,7 @@ func (this *Registry) isFieldInjectable(field *reflect.StructField, recurse bool
 	} else {
 		for _, beam := range beams {
 			if this.GetBeamDefaultInstance(beam).Status().Compare(InstanceStatus{}.New().CREATED) < 0 {
-				logger.GetLogger().Trace("Found beam but it is not created", "beam", beam.Attributes()[QualifierAttribute])
+				services.Get().Logger.Trace("Found beam but it is not created", "beam", beam.Attributes()[QualifierAttribute])
 				return false
 			}
 		}

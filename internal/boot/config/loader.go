@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"regexp"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	"gopkg.in/yaml.v3"
 )
@@ -29,14 +29,14 @@ func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader 
 
 		m := yamlConfigFileRegexp.FindStringSubmatch(entry.Name())
 		if len(m) == 0 {
-			logger.GetLogger().Debug("Unable to load configuration file", "name", entry.Name())
+			services.Get().Logger.Debug("Unable to load configuration file", "name", entry.Name())
 			return nil
 		}
 
 		if data, err := fs.ReadFile(fsys, path); err == nil {
 			config := map[string]any{}
 			if err := yaml.Unmarshal(data, &config); err == nil {
-				logger.GetLogger().Info("Loading configuration", "path", path, "profile", m[1])
+				services.Get().Logger.Info("Loading configuration", "path", path, "profile", m[1])
 				loader(config, m[1])
 			}
 		}

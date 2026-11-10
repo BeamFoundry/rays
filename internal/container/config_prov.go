@@ -4,7 +4,7 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -30,7 +30,7 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 	// TODO: Force it to be a singleton ???
 	parent = builder.Build()
 
-	logger.GetLogger().Debug("Evaluating registration beam with Configuration Stereotype", "beam", parent.Attributes()[QualifierAttribute], "methods", parent.Type().NumMethod())
+	services.Get().Logger.Debug("Evaluating registration beam with Configuration Stereotype", "beam", parent.Attributes()[QualifierAttribute], "methods", parent.Type().NumMethod())
 	for mt := range parent.Type().Methods() {
 		switch {
 		case mt.Type.NumOut() == 0 || mt.Type.NumOut() > 2:
@@ -50,7 +50,7 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 				continue
 			}
 		}
-		logger.GetLogger().Trace("Beam with Configuration Stereotype, looking method", "name", mt.Name, "func", mt.Type)
+		services.Get().Logger.Trace("Beam with Configuration Stereotype, looking method", "name", mt.Name, "func", mt.Type)
 		qualifier := CaseUtils(mt.Name).Uncapitalize().String()
 		annotatedType := parent.Type()
 
@@ -59,20 +59,20 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 
 		aType, aValue := container.GetMethodAnnotedType(&mt)
 		if aValue.IsValid() {
-			logger.GetLogger().Debug("Beam has AnnotedValue", "qualifier", qualifier, "type", mt.Type.Out(0))
+			services.Get().Logger.Debug("Beam has AnnotedValue", "qualifier", qualifier, "type", mt.Type.Out(0))
 			annotatedType = aType
 			shift++
 		}
 
 		switch {
 		case mt.Type.NumIn() > shift && mt.Type.In(shift) == reflect.TypeFor[context.Context]():
-			logger.GetLogger().Debug("Adding Prototype Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
+			services.Get().Logger.Debug("Adding Prototype Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
 			scope = BeamScope{}.New().PROTOTYPE
 		case mt.Type.NumIn() > shift:
-			logger.GetLogger().Debug("Skipping Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
+			services.Get().Logger.Debug("Skipping Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
 			continue
 		default:
-			logger.GetLogger().Debug("Adding Singleton Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
+			services.Get().Logger.Debug("Adding Singleton Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
 		}
 
 		// TODO: Exclude if Prototype and type implements BeamPostConstructWithContext

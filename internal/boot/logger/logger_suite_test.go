@@ -20,7 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/boot/logger"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 	. "github.com/BeamFoundry/rays/pkg/testing"
@@ -941,7 +941,7 @@ var _ = Describe("PatternHandler", func() {
 		h.SetFormat("%l(%v) %m(%v)")
 		Expect(h.GetFormat()).To(Equal("%l(%v) %m(%v)"))
 
-		lg := logger.GetLogger()
+		lg := logger.NewLogger()
 		lg.SetFormat("%l(%v) - %m(%v)")
 		Expect(lg.GetFormat()).To(Equal("%l(%v) - %m(%v)"))
 		lg.SetColor(true)
@@ -963,7 +963,7 @@ var _ = Describe("PatternHandler", func() {
 		Expect(buf.String()).To(Equal("\033[36mINFO\033[0m Forced\n"))
 
 		// On Logger with non-terminal output (buf)
-		lg := logger.GetLogger()
+		lg := logger.NewLogger()
 		lg.SetOutput(buf)
 		lg.EnableColor()
 		Expect(lg.IsColor()).To(BeFalse())
@@ -1086,7 +1086,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	})
 
 	It("covers Logger fallback when handler does not implement interfaces", func() {
-		lg := logger.GetLogger().Clone()
+		lg := logger.NewLogger().Clone()
 		defer lg.Reset()
 
 		lg.SetHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
@@ -1311,7 +1311,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 
 	It("covers additional AST traversal and formatting branches", func() {
 		// Clone with format on Logger
-		lg := logger.GetLogger().Clone()
+		lg := logger.NewLogger().Clone()
 		defer lg.Reset()
 		lg.SetFormat("%time(%v) %msg(%v)")
 		clonedWithFormat := lg.Clone()
@@ -1716,7 +1716,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	})
 
 	It("tracks explicit empty SetFormat independently and reapplies it on clone", func() {
-		lg := logger.GetLogger().Clone()
+		lg := logger.NewLogger().Clone()
 		defer lg.Reset()
 
 		lg.SetFormat("")

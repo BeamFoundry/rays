@@ -7,7 +7,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/BeamFoundry/rays/internal/config"
+	"github.com/BeamFoundry/rays/internal/boot/config"
+	"github.com/BeamFoundry/rays/internal/boot/logger"
 	_ "github.com/BeamFoundry/rays/pkg/testing"
 )
 
@@ -697,5 +698,26 @@ var _ = Describe("config", func() {
 		Expect(err).To(HaveOccurred())
 		_, err = c.GetConfigValue("favorites.books.released.Germinal")
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("can set a custom logger", func() {
+		c := config.NewConfig()
+		c.SetLogger(nil)
+		customLogger := logger.NewLogger()
+		c.SetLogger(customLogger)
+	})
+
+	It("can clear result and allow reinitialization", func() {
+		c := config.NewConfigFor(favorite)
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		v, err := c.GetConfigValue("favorite.book.author")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(v).To(Equal("Victor Hugo"))
+
+		c.Clear()
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		v, err = c.GetConfigValue("favorite.book.author")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(v).To(Equal("Victor Hugo"))
 	})
 })

@@ -4,40 +4,32 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"log/slog"
-	"maps"
 	"reflect"
-	"slices"
 	"sync"
 	"sync/atomic"
 
-	. "github.com/BeamFoundry/rays/internal/config"
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/boot"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
 type Container struct {
+	*boot.BootLoader
 	*Registry
-	*Config
-	loggingProperties *LoggingProperties
-	scanfor           reflect.Type
-	handler           func(io.Writer, *slog.HandlerOptions) slog.Handler
-	loggers           []string
-	lock              sync.Mutex
-	initialized       int32
-	scanning          bool
+	scanfor     reflect.Type
+	lock        sync.Mutex
+	initialized int32
+	scanning    bool
 	// filterScan  func(pkgName string) bool
 }
 
 var _ ContainerConfiguration = &Container{}
 
 var _container = &Container{
-	Registry: NewRegistry(),
-	Config:   NewConfig(),
-	scanfor:  reflect.TypeFor[Stereotype](),
-	handler:  nil,
+	BootLoader: boot.NewBootLoader(),
+	Registry:   NewRegistry(),
+	scanfor:    reflect.TypeFor[Stereotype](),
 }
 
 func GetContainer() *Container {
@@ -71,39 +63,6 @@ func (this *Container) ConfigUnmarshall(path string, object any) Error {
 		return err
 	}
 	return nil
-}
-
-func (this *Container) SetLoggingHandler(handler func(io.Writer, *slog.HandlerOptions) slog.Handler) {
-	this.handler = handler
-}
-
-func (this *Container) Logger() Logging {
-	return &logging{logger.GetLogger()}
-}
-
-func (this *Container) LoggerForClass(class any) Logging {
-	rtype := reflect.TypeOf(class)
-	return this.LoggerForType(rtype)
-}
-
-func (this *Container) LoggerForType(rtype reflect.Type) Logging {
-	if this.loggingProperties == nil || rtype.Kind() != reflect.Pointer || rtype.Elem().Kind() != reflect.Struct {
-		return this.Logger()
-	}
-
-	pkg := rtype.Elem().PkgPath()
-	name := pkg + "/" + rtype.Elem().Name()
-	for _, level := range this.loggers {
-		if pkg != level && name != level {
-			continue
-		}
-		logger.GetLogger().Trace("Creating specific new logger", "pkg", pkg, "name", name)
-		lg := logger.GetLogger().Clone()
-		logLevel := this.loggingProperties.MapLevels()[level]
-		lg.SetLogLevel(logLevel.Level())
-		return &logging{lg}
-	}
-	return this.Logger()
 }
 
 func (this *Container) isInitialized() bool {
@@ -172,35 +131,10 @@ func (this *Container) Initialize() Error {
 		return NewError("InitializationError", "Container is already initialized")
 	}
 
-	// 1. Initializing configuration & logging
-	// Initialize configuration
-	//nolint:errcheck // It should not happen
-	this.InitConfig()
-
-	// Initializing logging
-	if cfg, err := this.GetSubConfig("rays.logging"); err == nil {
-		this.loggingProperties = &LoggingProperties{}
-		err := cfg.Unmarshal(this.loggingProperties)
-		if err != nil {
-			return err
-		}
-		level := this.loggingProperties.LogLevel()
-		logger.GetLogger().SetLogLevel(level.Level())
-		if this.loggingProperties.AddSource() {
-			logger.GetLogger().AddSource()
-		}
-		if this.handler != nil {
-			logger.GetLogger().SetHandler(this.handler)
-		} else if handler := this.loggingProperties.LogHandler(); handler.Handler(this.loggingProperties.Format()) != nil {
-			logger.GetLogger().SetHandler(handler.Handler(this.loggingProperties.Format()))
-		}
-		this.loggingProperties.LogColor().Apply(logger.GetLogger())
-		this.loggers = slices.Sorted(maps.Keys(this.loggingProperties.MapLevels()))
-		slices.Reverse(this.loggers)
+	// 1. Initializing configuration & logging via BootLoader
+	if err := this.Boot(); err != nil {
+		return err
 	}
-	logger.GetLogger().SetDefault()
-
-	logger.GetLogger().Debug("Config & Logging initialized")
 
 	// 2. Scan for Stereotype
 	if this.scanning || flag.Lookup("test.v") == nil {
@@ -216,13 +150,13 @@ func (this *Container) Initialize() Error {
 		}
 		for _, t := range FindTypesImplementingInterface(this.scanfor) {
 			if t.Implements(bp) {
-				logger.GetLogger().Debug("Beam scanning skipping provider beam", "type", t.String())
+				services.Get().Logger.Debug("Beam scanning skipping provider beam", "type", t.String())
 				continue
 			} else if filterScan(t.Elem()) && !filterScan(this.scanfor) {
-				logger.GetLogger().Trace("Beam scanning skipping filtered beam", "type", t.String())
+				services.Get().Logger.Trace("Beam scanning skipping filtered beam", "type", t.String())
 				continue
 			}
-			logger.GetLogger().Debug("Beam scanning found beam", "type", t.String())
+			services.Get().Logger.Debug("Beam scanning found beam", "type", t.String())
 			if _, err := this.AddBeamFor(t); err != nil {
 				err.LogError()
 			}
@@ -240,7 +174,7 @@ func (this *Container) Initialize() Error {
 		for _, beam := range creatableBeams {
 			if err := this.CreateBeam(beam); err != nil {
 				if err.Name() == "InvalidBeamError" {
-					logger.GetLogger().Trace("Beam not yet createable", "message", err.Message(), "qualifier", beam.Attributes()[QualifierAttribute])
+					services.Get().Logger.Trace("Beam not yet createable", "message", err.Message(), "qualifier", beam.Attributes()[QualifierAttribute])
 				} else {
 					err.LogError()
 				}
@@ -256,7 +190,7 @@ func (this *Container) Initialize() Error {
 					if err := this.InitializeBeam(beam); err != nil {
 						err.LogError()
 					} else {
-						logger.GetLogger().Debug("Initializing parent beam", "type", beam.Type())
+						services.Get().Logger.Debug("Initializing parent beam", "type", beam.Type())
 					}
 				}
 			}
@@ -267,7 +201,7 @@ func (this *Container) Initialize() Error {
 			err := NewError("BeamCreationError", fmt.Sprintf("Unable to create more beams, %d remaining", len(creatableBeams)))
 			err.LogError()
 			for _, beam := range creatableBeams {
-				logger.GetLogger().Error("BeamCreationError: Beam not created", "qualifier", beam.Attributes()[QualifierAttribute], "type", beam.Type())
+				services.Get().Logger.Error("BeamCreationError: Beam not created", "qualifier", beam.Attributes()[QualifierAttribute], "type", beam.Type())
 			}
 			return err
 		}
@@ -286,7 +220,7 @@ func (this *Container) Initialize() Error {
 		}
 	*/
 
-	logger.GetLogger().Info("All beam created")
+	services.Get().Logger.Info("All beam created")
 
 	injectableBeams := this.GetAllInjectableBeams()
 	injectable := len(injectableBeams)
@@ -323,11 +257,11 @@ func (this *Container) Initialize() Error {
 			}
 		}
 	*/
-	logger.GetLogger().Info("All beam injected")
+	services.Get().Logger.Info("All beam injected")
 
 	this.initializeBeams(func(beam Beam) bool {
 		if beam.Type().Kind() != reflect.Interface && FindFieldWithAnnotation[ConfigurationProperties](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing ConfigurationProperties beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing ConfigurationProperties beam", "type", beam.Type())
 			return true
 		}
 		return false
@@ -344,49 +278,49 @@ func (this *Container) Initialize() Error {
 			}
 		}
 		if init {
-			logger.GetLogger().Debug("Initializing Configuration beam", "type", beam.AnnotatedType())
+			services.Get().Logger.Debug("Initializing Configuration beam", "type", beam.AnnotatedType())
 			return true
 		}
 		return false
 	})
 	this.initializeBeams(func(beam Beam) bool {
 		if FindFieldForInterface[Component](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing Component beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing Component beam", "type", beam.Type())
 			return true
 		}
 		return false
 	})
 	this.initializeBeams(func(beam Beam) bool {
 		if FindFieldForInterface[Repository](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing Repository beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing Repository beam", "type", beam.Type())
 			return true
 		}
 		return false
 	})
 	this.initializeBeams(func(beam Beam) bool {
 		if FindFieldForInterface[Service](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing Service beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing Service beam", "type", beam.Type())
 			return true
 		}
 		return false
 	})
 	this.initializeBeams(func(beam Beam) bool {
 		if FindFieldForInterface[Controller](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing Controller beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing Controller beam", "type", beam.Type())
 			return true
 		}
 		return false
 	})
 	this.initializeBeams(func(beam Beam) bool {
 		if FindFieldForInterface[Stereotype](beam.Type()) != nil {
-			logger.GetLogger().Debug("Initializing Stereotype beam", "type", beam.Type())
+			services.Get().Logger.Debug("Initializing Stereotype beam", "type", beam.Type())
 			return true
 		}
 		return false
 	})
 
 	this.initializeBeams(func(beam Beam) bool {
-		logger.GetLogger().Trace("Initializing remaining beam", "type", beam.Type())
+		services.Get().Logger.Trace("Initializing remaining beam", "type", beam.Type())
 		return true
 	})
 
@@ -397,7 +331,7 @@ func (this *Container) Initialize() Error {
 		}
 	}
 
-	logger.GetLogger().Info("All beam initialized")
+	services.Get().Logger.Info("All beam initialized")
 	atomic.StoreInt32(&this.initialized, 1)
 	return nil
 }
@@ -410,10 +344,10 @@ func (this *Container) filterConditionalBeams() {
 				continue
 			}
 			if condition := this.GetBeamCondition(beam, includePostEvent); condition != nil && !condition.EvaluateBeamCondition(beam, this) {
-				logger.GetLogger().Debug("Removing (parent) beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
+				services.Get().Logger.Debug("Removing (parent) beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
 				this.UnregisterBeam(beam)
 				for _, child := range this.GetBeamChildren(beam) {
-					logger.GetLogger().Debug("Removing (child) beam has its condition evaluates to false", "type", child.Type(), "qualifier", child.Attributes()[QualifierAttribute])
+					services.Get().Logger.Debug("Removing (child) beam has its condition evaluates to false", "type", child.Type(), "qualifier", child.Attributes()[QualifierAttribute])
 					this.UnregisterBeam(child)
 				}
 			}
@@ -425,7 +359,7 @@ func (this *Container) filterConditionalBeams() {
 				continue
 			}
 			if condition := this.GetBeamCondition(beam, includePostEvent); condition != nil && !condition.EvaluateBeamCondition(beam, this) {
-				logger.GetLogger().Debug("Removing child beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
+				services.Get().Logger.Debug("Removing child beam has its condition evaluates to false", "type", beam.Type(), "qualifier", beam.Attributes()[QualifierAttribute])
 				this.UnregisterBeam(beam)
 			}
 		}
@@ -449,14 +383,10 @@ func (this *Container) Reset() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.Registry.Reset()
-	this.Config.Reset()
+	this.BootLoader.Reset()
 	this.initialized = 0
 	this.scanning = false
 	this.scanfor = reflect.TypeFor[Stereotype]()
-	this.handler = nil
-	this.loggingProperties = nil
-	this.loggers = []string{}
-	logger.GetLogger().Reset()
 }
 
 func (this *Container) Run() {

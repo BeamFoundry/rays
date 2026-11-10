@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/boot/logger"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 	. "github.com/BeamFoundry/rays/pkg/util"
@@ -42,10 +42,12 @@ type configDuplicator struct {
 }
 
 type Config struct {
-	defaultConfig   HashMap[string, any]
+	logger          *logger.Logger
 	config          HashMap[string, any]
 	profileConfig   HashMap[string, HashMap[string, any]]
 	overrides       HashMap[string, string]
+	result          HashMap[string, any]
+	defaultConfig   HashMap[string, any]
 	profiles        []string
 	defaultConfigFS []fs.FS
 	duplicators     []configDuplicator
@@ -73,7 +75,29 @@ func NewConfig() *Config {
 		overrides:       NewHashMap[string, string](),
 		profileConfig:   NewHashMap[string, HashMap[string, any]](),
 		profiles:        []string{},
+		result:          NewHashMap[string, any](),
+		logger:          logger.NewLogger(),
 	}
+}
+
+func (this *Config) SetLogger(l *logger.Logger) {
+	if l != nil {
+		this.logger = l
+	}
+}
+
+func (this *Config) Clear() {
+	this.lock.Lock()
+	defer this.lock.Unlock()
+	this.result.Clear()
+	atomic.StoreInt32(&this.initialized, 0)
+}
+
+func (this *Config) getActiveConfig() HashMap[string, any] {
+	if this.result.Size() > 0 {
+		return this.result
+	}
+	return this.config
 }
 
 func (this *Config) Reset() {
@@ -81,6 +105,7 @@ func (this *Config) Reset() {
 	defer this.lock.Unlock()
 	this.profiles = []string{}
 	this.config.Clear()
+	this.result.Clear()
 	this.overrides.Clear()
 	this.configFS = []fs.FS{}
 	this.defaultConfig.Remove("test")
@@ -284,9 +309,9 @@ func (this *Config) GetConfigValue(key string) (string, Error) {
 		k, _ = strings.CutPrefix(k, "[")
 		k, _ = strings.CutSuffix(k, "]")
 		override := String(k).ToLowerCase().String()
-		v, ok := this.config.Get(key).Get()
+		v, ok := this.getActiveConfig().Get(key).Get()
 		if !ok {
-			logger.GetLogger().Debug("GetConfigValue: last key failed")
+			this.logger.Debug("GetConfigValue: last key failed")
 			return "", NewKeyNotFoundError(key, keys[0])
 		}
 		if o, ok := this.overrides.Get(override).Get(); ok {
@@ -360,12 +385,15 @@ func (this *Config) GetSubConfig(key string) (*Config, Error) {
 		return nil, NewInvalidTypeKeyError(keys[0], key)
 	}
 
-	c, err := getMapValue(this.config.Map(), keys)
+	c, err := getMapValue(this.getActiveConfig().Map(), keys)
 	if err != nil {
 		return NewConfig(), err
 	}
 	s := NewConfig()
 	s.config = NewHashMapFor(c)
+	s.result = NewHashMapFor(c)
+	s.logger = this.logger
+	s.initialized = 1
 	if len(keys) == 1 {
 		key, _ = strings.CutPrefix(key, "[")
 		key, _ = strings.CutSuffix(key, "]")
@@ -413,7 +441,6 @@ func (this *Config) InitConfig() Error {
 		}
 	}
 	config := NewHashMap[string, any]()
-	//+ logger.GetLogger().Trace("Config::Pre-Initialize", "default", this.defaultConfig)
 	config.Merge(this.defaultConfig)
 	for _, duplicate := range this.duplicators {
 		err := Try(func() {
@@ -429,16 +456,14 @@ func (this *Config) InitConfig() Error {
 			err.LogError()
 		}
 	}
-	//+ logger.GetLogger().Trace("Config::Pre-Initialize", "config", this.config)
 	config.Merge(this.config)
-	//+ logger.GetLogger().Trace("Config::Post-Initialize", "default", this.defaultConfig)
-	this.config = config
+	this.result = config
 	for _, profile := range this.profiles {
 		if profileConfig, ok := this.profileConfig.Get(profile).Get(); ok {
-			this.config.Merge(profileConfig)
+			this.result.Merge(profileConfig)
 		}
 	}
-	logger.GetLogger().Debug("Config::Post-Initialize", "config", this.config)
+	this.logger.Debug("Config::Post-Initialize", "config", this.result)
 	atomic.StoreInt32(&this.initialized, 1)
 	return nil
 }
@@ -631,7 +656,7 @@ func (this *Config) unmarshal(obj any) Error {
 		var value reflect.Value
 		override := String(field.Name).ToLowerCase().String()
 
-		if v, ok := this.config.Get(field.Name).Get(); ok {
+		if v, ok := this.getActiveConfig().Get(field.Name).Get(); ok {
 			if o, ok := this.overrides.Get(override).Get(); ok {
 				v = o
 			}

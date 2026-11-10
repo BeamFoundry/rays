@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 )
 
 // Error is an interface representing an advanced error type, as it implements the [builtin.error] interface.
@@ -178,14 +178,14 @@ func (this *DefaultError) Format(state fmt.State, verb rune) {
 
 // Log() will log the error at the specified level, with optional arguments
 func (this *DefaultError) Log(level slog.Level, args ...any) {
-	if logger.GetLogger().Enabled(context.Background(), logger.LevelError) {
+	if services.Get().Logger.Enabled(context.Background(), slog.LevelError) {
 		this.logFrames(level, []runtime.Frame{}, args...)
 	}
 }
 
 // LogWithStackTrace() will log error with a stacktrace to its creation, with optional arguments.
 func (this *DefaultError) LogWithStackTrace(level slog.Level, args ...any) {
-	if logger.GetLogger().Enabled(context.Background(), logger.LevelError) {
+	if services.Get().Logger.Enabled(context.Background(), slog.LevelError) {
 		this.logFrames(level, this.frames, args...)
 	}
 }
@@ -193,14 +193,14 @@ func (this *DefaultError) LogWithStackTrace(level slog.Level, args ...any) {
 // LogError() will log the error at Error level, with optional arguments.
 func (this *DefaultError) LogError(args ...any) {
 	// TODO: Review why we use logFrames
-	if logger.GetLogger().Enabled(context.Background(), logger.LevelError) {
+	if services.Get().Logger.Enabled(context.Background(), slog.LevelError) {
 		this.logFrames(slog.LevelError, []runtime.Frame{}, args...)
 	}
 }
 
 // LogErrorWithStackTrace() will log the error at Error level, wit hstacktrace and optional arguments
 func (this *DefaultError) LogErrorWithStackTrace(args ...any) {
-	if logger.GetLogger().Enabled(context.Background(), logger.LevelError) {
+	if services.Get().Logger.Enabled(context.Background(), slog.LevelError) {
 		this.logFrames(slog.LevelError, this.frames, args...)
 	}
 }
@@ -231,7 +231,7 @@ func (this *DefaultError) logFrames(level slog.Level, frames []runtime.Frame, ar
 	record.Add(this.attributes...)
 	record.Add(args...)
 	//nolint:errcheck // ignoring
-	logger.GetLogger().Handler().Handle(context.Background(), record)
+	services.Get().Logger.Handler().Handle(context.Background(), record)
 }
 
 //---

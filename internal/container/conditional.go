@@ -7,7 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 )
 
@@ -30,15 +31,15 @@ func (this *ConditionalOnProfileEvaluator) Profile() string {
 func (this *ConditionalOnProfileEvaluator) EvaluateBeamCondition(beam Beam, environment InitializingContext) bool {
 	this.reflectType = beam.AnnotatedType()
 	if this.Profile() == "" {
-		logger.GetLogger().Trace("Empty profile name, assuming true", "type", this.reflectType.Elem().Name())
+		services.Get().Logger.Trace("Empty profile name, assuming true", "type", this.reflectType.Elem().Name())
 		return true
 	}
 	for profile := range strings.SplitSeq(this.Profile(), ",") {
 		if slices.Contains(environment.ActiveProfiles(), profile) {
-			logger.GetLogger().Trace("Profile found", "type", this.reflectType.Name(), "profile", profile)
+			services.Get().Logger.Trace("Profile found", "type", this.reflectType.Name(), "profile", profile)
 			return true
 		}
-		logger.GetLogger().Trace("Profile not found", "type", this.reflectType.Name(), "profile", profile)
+		services.Get().Logger.Trace("Profile not found", "type", this.reflectType.Name(), "profile", profile)
 	}
 	return false
 }
@@ -90,7 +91,7 @@ func (this *ConditionalOnPropertyEvaluator) EvaluateBeamCondition(beam Beam, con
 	this.reflectType = beam.AnnotatedType()
 	name := this.Name()
 
-	this.log = logger.GetLogger().With(
+	this.log = services.Get().Logger.With(
 		"beam", beam.Type(),
 		"tag", FindFieldWithAnnotation[ConditionalOnProperty](this.reflectType).Tag,
 	)
@@ -138,13 +139,13 @@ func (this *ConditionalOnMissingBeamEvaluator) MissingBeam() any {
 func (this *ConditionalOnMissingBeamEvaluator) EvaluateBeamCondition(beam Beam, container InitializingContext) bool {
 	this.reflectType = beam.Type()
 	beams := container.FindBeams(this.MissingBeam().(reflect.Type))
-	logger.GetLogger().Trace("Evaluating beam", "type", this.reflectType, "quantity", len(beams))
+	services.Get().Logger.Trace("Evaluating beam", "type", this.reflectType, "quantity", len(beams))
 
 	if len(beams) > 1 {
-		logger.GetLogger().Trace("Found different beam, returning false", "type", this.reflectType)
+		services.Get().Logger.Trace("Found different beam, returning false", "type", this.reflectType)
 		return false
 	}
-	logger.GetLogger().Trace("Returning true", "type", this.reflectType)
+	services.Get().Logger.Trace("Returning true", "type", this.reflectType)
 	return true
 }
 
