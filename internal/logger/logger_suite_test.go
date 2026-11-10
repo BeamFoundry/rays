@@ -164,6 +164,10 @@ var _ = Describe("Logger", func() {
 			lg.SetHandlerOptions(nil)
 			Expect(lg.GetHandlerOptions()).To(Equal(slog.HandlerOptions{}))
 			Expect(lg.Clone()).NotTo(BeNil())
+
+			var uninit logger.Logger
+			Expect(uninit.GetHandlerOptions()).To(Equal(slog.HandlerOptions{}))
+			Expect(logger.CloneOptions(&uninit)).To(BeNil())
 		})
 		It("can log Error with StackTrace", func() {
 			err := NewError("TestError", "TestError")
