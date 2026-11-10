@@ -394,8 +394,8 @@ func (this *Config) GetSubConfig(key string) (*Config, Error) {
 		return newConfigWithLogger(this.logger), err
 	}
 	s := newConfigWithLogger(this.logger)
-	s.config = NewHashMapFor(c)
-	s.result = NewHashMapFor(c)
+	s.config = NewHashMapFrom(c)
+	s.result = NewHashMapFrom(c)
 	s.initialized = 1
 	if len(keys) == 1 {
 		key, _ = strings.CutPrefix(key, "[")

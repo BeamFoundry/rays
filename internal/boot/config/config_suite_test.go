@@ -739,4 +739,28 @@ var _ = Describe("config", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(config.GetConfigLogger(sub)).To(BeIdenticalTo(customLogger))
 	})
+
+	It("ensures subconfiguration uses independent copies and Clear does not mutate parent or prevent reinitialization", func() {
+		parent := config.NewConfigFor(favorite)
+		Expect(parent.InitConfig()).NotTo(HaveOccurred())
+
+		sub, err := parent.GetSubConfig("favorite")
+		Expect(err).NotTo(HaveOccurred())
+
+		val, err := sub.GetConfigValue("book.author")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(val).To(Equal("Victor Hugo"))
+
+		// Clearing subconfiguration should not mutate the parent's nested map
+		sub.Clear()
+		parentVal, err := parent.GetConfigValue("favorite.book.author")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parentVal).To(Equal("Victor Hugo"))
+
+		// Clearing subconfiguration should not prevent reinitialization
+		Expect(sub.InitConfig()).NotTo(HaveOccurred())
+		reinitVal, err := sub.GetConfigValue("book.author")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reinitVal).To(Equal("Victor Hugo"))
+	})
 })
