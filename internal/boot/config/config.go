@@ -222,6 +222,9 @@ func (this *Config) CopyDefaultConfigForProfile(from, to, profile string) Error 
 
 func (this *Config) loadConfig(config map[string]any) {
 	this.config.Merge(NewHashMapFor(config))
+	if this.result.Size() > 0 {
+		this.result.Merge(NewHashMapFor(deepCloneMap(config)))
+	}
 }
 
 func (this *Config) LoadConfig(config map[string]any) Error {
@@ -351,6 +354,39 @@ func (this *Config) Unmarshal(obj any) Error {
 	return this.validate(obj)
 }
 
+func deepCloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = deepCloneValue(v)
+	}
+	return cp
+}
+
+func deepCloneSlice(s []any) []any {
+	if s == nil {
+		return nil
+	}
+	cp := make([]any, len(s))
+	for i, v := range s {
+		cp[i] = deepCloneValue(v)
+	}
+	return cp
+}
+
+func deepCloneValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCloneMap(val)
+	case []any:
+		return deepCloneSlice(val)
+	default:
+		return v
+	}
+}
+
 func (this *Config) GetSubConfig(key string) (*Config, Error) {
 	keys := []string{}
 	for _, match := range re.FindAllStringSubmatch(key, -1) {
@@ -394,9 +430,8 @@ func (this *Config) GetSubConfig(key string) (*Config, Error) {
 		return newConfigWithLogger(this.logger), err
 	}
 	s := newConfigWithLogger(this.logger)
-	s.config = NewHashMapFrom(c)
-	s.result = NewHashMapFrom(c)
-	s.initialized = 1
+	s.config = NewHashMapFor(deepCloneMap(c))
+	s.result = NewHashMapFor(deepCloneMap(c))
 	if len(keys) == 1 {
 		key, _ = strings.CutPrefix(key, "[")
 		key, _ = strings.CutSuffix(key, "]")

@@ -763,4 +763,54 @@ var _ = Describe("config", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reinitVal).To(Equal("Victor Hugo"))
 	})
+
+	It("deep-clones nested maps and slices so child LoadConfig updates cannot mutate parent configuration", func() {
+		cfg := map[string]any{
+			"service": map[string]any{
+				"database": map[string]any{
+					"host": "localhost",
+					"port": 5432,
+				},
+				"tags": []any{"primary", "v1"},
+				"servers": []any{
+					map[string]any{"name": "srv1"},
+				},
+			},
+		}
+		parent := config.NewConfigFor(cfg)
+		Expect(parent.InitConfig()).NotTo(HaveOccurred())
+
+		child, err := parent.GetSubConfig("service")
+		Expect(err).NotTo(HaveOccurred())
+
+		// Update child database host via LoadConfig merge
+		Expect(child.LoadConfig(map[string]any{
+			"database": map[string]any{
+				"host": "remotehost",
+			},
+		})).NotTo(HaveOccurred())
+
+		// Parent database host must remain unchanged
+		pHost, err := parent.GetConfigValue("service.database.host")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pHost).To(Equal("localhost"))
+
+		pPort, err := parent.GetConfigValue("service.database.port")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pPort).To(Equal("5432"))
+
+		// Child reflects the updated value after initialization
+		Expect(child.InitConfig()).NotTo(HaveOccurred())
+		cHost, err := child.GetConfigValue("database.host")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cHost).To(Equal("remotehost"))
+
+		cPort, err := child.GetConfigValue("database.port")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cPort).To(Equal("5432"))
+
+		// Ensure deep clone handles nil map and nil slice
+		Expect(config.DeepCloneMap(nil)).To(BeNil())
+		Expect(config.DeepCloneSlice(nil)).To(BeNil())
+	})
 })
