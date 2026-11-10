@@ -562,11 +562,12 @@ func (this *Config) InitConfig() Error {
 			err.LogError()
 		}
 	}
-	config.Merge(this.config)
+	baseConfig := NewHashMapFor(deepCloneMap(this.config.Map()))
+	config.Merge(baseConfig)
 	this.result = config
 	for _, profile := range this.profiles {
 		if profileConfig, ok := this.profileConfig.Get(profile).Get(); ok {
-			this.result.Merge(profileConfig)
+			this.result.Merge(NewHashMapFor(deepCloneMap(profileConfig.Map())))
 		}
 	}
 	this.logger.Debug("Config::Post-Initialize", "config", this.result)

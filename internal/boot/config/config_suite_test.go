@@ -2,6 +2,8 @@ package config_test
 
 import (
 	"embed"
+	"errors"
+	"io/fs"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -11,6 +13,12 @@ import (
 	"github.com/BeamFoundry/rays/internal/boot/logger"
 	_ "github.com/BeamFoundry/rays/pkg/testing"
 )
+
+type failingFS struct{}
+
+func (failingFS) Open(_ string) (fs.File, error) {
+	return nil, errors.New("failing filesystem error")
+}
 
 func TestConfig(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -818,5 +826,75 @@ var _ = Describe("config", func() {
 		// Ensure deep clone handles nil map and nil slice
 		Expect(config.DeepCloneMap(nil)).To(BeNil())
 		Expect(config.DeepCloneSlice(nil)).To(BeNil())
+	})
+
+	It("handles filesystem walk errors without panic in YamlConfigFSLoader", func() {
+		loader := &config.YamlConfigFSLoader{}
+		called := false
+		loader.ParseConfigurationFilesystem(failingFS{}, func(_ map[string]any, _ string) {
+			called = true
+		})
+		Expect(called).To(BeFalse())
+
+		c := config.NewConfig()
+		Expect(c.AddConfigFS(failingFS{})).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+	})
+
+	It("does not mutate base configuration when merging profile configs, preserving it across Clear and reinit", func() {
+		c := config.NewConfig()
+		Expect(c.LoadConfig(map[string]any{
+			"server": map[string]any{
+				"host": "basehost",
+				"port": 8080,
+			},
+		})).NotTo(HaveOccurred())
+		Expect(c.LoadConfigForProfile(map[string]any{
+			"server": map[string]any{
+				"host": "profilehost",
+			},
+		}, "prod")).NotTo(HaveOccurred())
+		Expect(c.SetActiveProfiles([]string{"prod"})).NotTo(HaveOccurred())
+
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		host, err := c.GetConfigValue("server.host")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(host).To(Equal("profilehost"))
+
+		c.Clear()
+		Expect(c.SetActiveProfiles([]string{})).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+
+		host, err = c.GetConfigValue("server.host")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(host).To(Equal("basehost"))
+	})
+
+	It("does not mutate profile configuration when merging into result", func() {
+		c := config.NewConfig()
+		Expect(c.LoadConfig(map[string]any{
+			"app": map[string]any{
+				"env": "base",
+			},
+		})).NotTo(HaveOccurred())
+		Expect(c.LoadConfigForProfile(map[string]any{
+			"app": map[string]any{
+				"env": "dev",
+			},
+		}, "dev")).NotTo(HaveOccurred())
+		Expect(c.SetActiveProfiles([]string{"dev"})).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+
+		val, err := c.GetConfigValue("app.env")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(val).To(Equal("dev"))
+
+		c.Clear()
+		Expect(c.SetActiveProfiles([]string{"dev"})).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+
+		val, err = c.GetConfigValue("app.env")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(val).To(Equal("dev"))
 	})
 })
