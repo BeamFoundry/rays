@@ -64,8 +64,7 @@ func NewConfigFor(m map[string]any) *Config {
 	return c
 }
 
-// TODO: Define configurable ConfigLoader !!!
-func NewConfig() *Config {
+func newConfigWithLogger(l *logger.Logger) *Config {
 	return &Config{
 		configFS:        []fs.FS{},
 		config:          NewHashMap[string, any](),
@@ -76,8 +75,13 @@ func NewConfig() *Config {
 		profileConfig:   NewHashMap[string, HashMap[string, any]](),
 		profiles:        []string{},
 		result:          NewHashMap[string, any](),
-		logger:          logger.NewLogger(),
+		logger:          l,
 	}
+}
+
+// TODO: Define configurable ConfigLoader !!!
+func NewConfig() *Config {
+	return newConfigWithLogger(logger.NewLogger())
 }
 
 func (this *Config) SetLogger(l *logger.Logger) {
@@ -387,12 +391,11 @@ func (this *Config) GetSubConfig(key string) (*Config, Error) {
 
 	c, err := getMapValue(this.getActiveConfig().Map(), keys)
 	if err != nil {
-		return NewConfig(), err
+		return newConfigWithLogger(this.logger), err
 	}
-	s := NewConfig()
+	s := newConfigWithLogger(this.logger)
 	s.config = NewHashMapFor(c)
 	s.result = NewHashMapFor(c)
-	s.logger = this.logger
 	s.initialized = 1
 	if len(keys) == 1 {
 		key, _ = strings.CutPrefix(key, "[")

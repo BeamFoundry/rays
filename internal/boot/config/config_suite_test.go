@@ -720,4 +720,23 @@ var _ = Describe("config", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(v).To(Equal("Victor Hugo"))
 	})
+
+	It("reuses parent logger in GetSubConfig and creates independent logger in NewConfig", func() {
+		c1 := config.NewConfig()
+		c2 := config.NewConfig()
+		Expect(config.GetConfigLogger(c1)).NotTo(BeNil())
+		Expect(config.GetConfigLogger(c2)).NotTo(BeNil())
+		Expect(config.GetConfigLogger(c1)).NotTo(BeIdenticalTo(config.GetConfigLogger(c2)))
+
+		customLogger := logger.NewLogger()
+		c1.SetLogger(customLogger)
+		Expect(config.GetConfigLogger(c1)).To(BeIdenticalTo(customLogger))
+
+		Expect(c1.LoadConfig(favorite)).NotTo(HaveOccurred())
+		Expect(c1.InitConfig()).NotTo(HaveOccurred())
+
+		sub, err := c1.GetSubConfig("favorite")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(config.GetConfigLogger(sub)).To(BeIdenticalTo(customLogger))
+	})
 })
