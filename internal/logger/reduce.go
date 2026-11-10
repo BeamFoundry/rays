@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -45,13 +44,33 @@ func ReduceFunctionName(function string) string {
 		return ret
 	}
 
-	dir := filepath.Dir(function)
-	base := filepath.Base(function)
+	bracketDepth := 0
+	lastSlash := -1
+scanLoop:
+	for i := len(function) - 1; i >= 0; i-- {
+		switch function[i] {
+		case ']':
+			bracketDepth++
+		case '[':
+			bracketDepth--
+		case '/':
+			if bracketDepth == 0 {
+				lastSlash = i
+				break scanLoop
+			}
+		default:
+		}
+	}
+	dir := "."
+	base := function
+	if lastSlash != -1 {
+		dir = function[:lastSlash]
+		base = function[lastSlash+1:]
+	}
 
 	var comp []string
 	if idx := strings.Index(base, ".(*"); idx != -1 {
-		if end := strings.Index(base[idx+1:], ")"); end != -1 {
-			end += idx + 1
+		if end := strings.LastIndex(base, ")"); end != -1 && end > idx+2 {
 			pkgPart := base[:idx]
 			recv := base[idx+1 : end+1]
 			method := strings.TrimPrefix(base[end+1:], ".")
@@ -102,6 +121,9 @@ func ReduceFunctionName(function string) string {
 	}
 
 	ret := pkg + "." + obj
+	if len(comp) > 2 && comp[2] != "" && strings.Contains(obj, "[") {
+		ret += "." + comp[2]
+	}
 	if len(functionCache) < maxFunctionCacheSize {
 		functionCache[function] = ret
 	}
