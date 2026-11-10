@@ -702,9 +702,15 @@ var _ = Describe("config", func() {
 
 	It("can set a custom logger", func() {
 		c := config.NewConfig()
+		initialLogger := config.GetConfigLogger(c)
+		Expect(initialLogger).NotTo(BeNil())
+
 		c.SetLogger(nil)
+		Expect(config.GetConfigLogger(c)).To(BeIdenticalTo(initialLogger))
+
 		customLogger := logger.NewLogger()
 		c.SetLogger(customLogger)
+		Expect(config.GetConfigLogger(c)).To(BeIdenticalTo(customLogger))
 	})
 
 	It("can clear result and allow reinitialization", func() {
