@@ -6,6 +6,10 @@ fmt:
 	go vet ./...
 	go fmt ./...
 
+.PHONY: fix
+fix: fmt
+	go fix ./...
+
 .PHONY: clean
 clean:
 	rm -f coverprofile.out
@@ -16,5 +20,4 @@ test: fmt
 	ginkgo run -cover ./...
 
 .PHONY: validate
-validate: test
-	go fix ./...
+validate: fix test
