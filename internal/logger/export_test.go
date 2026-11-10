@@ -17,11 +17,16 @@ var (
 	AppendFormattedValue = appendFormattedValue
 	IsTerminal           = isTerminal
 	NeedsQuoting         = needsQuoting
-	SetHostnameFunc      = func(f func() (string, error)) { hostnameFunc = f }
-	SetJsonMarshalFunc   = func(f func(any) ([]byte, error)) { jsonMarshalFunc = f }
-	NewUnknownKeyNode    = func() PatternNode { return &KeyNode{key: "unknown"} }
-	NewUnknownValueNode  = func() PatternNode { return &ValueFormatNode{target: "unknown"} }
-	NewRenderContext     = func() *renderContext {
+	SetHostnameFunc      = func(f func() (string, error)) {
+		emitterIdentityMu.Lock()
+		defer emitterIdentityMu.Unlock()
+		hostnameFunc = f
+		cachedHostname = ""
+	}
+	SetJsonMarshalFunc  = func(f func(any) ([]byte, error)) { jsonMarshalFunc = f }
+	NewUnknownKeyNode   = func() PatternNode { return &KeyNode{key: "unknown"} }
+	NewUnknownValueNode = func() PatternNode { return &ValueFormatNode{target: "unknown"} }
+	NewRenderContext    = func() *renderContext {
 		return &renderContext{rep: func(_ []string, a slog.Attr) slog.Attr { return a }}
 	}
 	FormatSourceHelper = func(timeFormat string, attr slog.Attr, pc uintptr) string {

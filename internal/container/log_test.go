@@ -32,6 +32,13 @@ var _ = Describe("Logging", func() {
 		instance.TraceContext(context.Background(), "logging")
 		instance.Fatal("logging")
 		instance.FatalContext(context.Background(), "logging")
+		origOpts := instance.GetHandlerOptions()
+		opts := origOpts
+		opts.AddSource = !opts.AddSource
+		Expect(instance.GetHandlerOptions().AddSource).NotTo(Equal(opts.AddSource))
+		instance.SetHandlerOptions(&opts)
+		Expect(instance.GetHandlerOptions().AddSource).To(Equal(opts.AddSource))
+		instance.SetHandlerOptions(&origOpts)
 	})
 	It("can inject itself", func() {
 		err := GetContainer().LoadConfigAt(map[string]any{

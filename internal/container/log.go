@@ -122,7 +122,7 @@ type LoggingProperties struct {
 	// Log format for CUSTOM handler
 	format string
 	/* configuration keys */
-	// Set rays.logging.handler to "DEFAULT", "TEXT", "JSON" or "CUSTOM"
+	// Set rays.logging.handler to "DEFAULT", "TEXT", "JSON", "ECS", "GELF", "LOGSTASH" or "CUSTOM"
 	handler LogHandler
 	// Set rays.logging.level to "TRACE", "DEBUG", "INFO", "WARN", "ERROR" or "FATAL".
 	// Defaults to "INFO"

@@ -143,6 +143,28 @@ var _ = Describe("Logger", func() {
 		It("can be cloned", func() {
 			Expect(GetLogger().Clone()).NotTo(BeNil())
 		})
+		It("can get and set handler options", func() {
+			lg := GetLogger().Clone()
+			opts := lg.GetHandlerOptions()
+			opts.AddSource = !opts.AddSource
+			Expect(lg.GetHandlerOptions().AddSource).NotTo(Equal(opts.AddSource))
+
+			called := false
+			lg.SetHandler(func(w io.Writer, o *slog.HandlerOptions) slog.Handler {
+				called = true
+				return logger.NewHandler(w, o)
+			})
+			called = false
+			newOpts := &slog.HandlerOptions{AddSource: false, Level: logger.LevelDebug}
+			lg.SetHandlerOptions(newOpts)
+			Expect(called).To(BeTrue())
+			Expect(lg.GetHandlerOptions().AddSource).To(BeFalse())
+			Expect(lg.GetHandlerOptions().Level).To(Equal(logger.LevelDebug))
+
+			lg.SetHandlerOptions(nil)
+			Expect(lg.GetHandlerOptions()).To(Equal(slog.HandlerOptions{}))
+			Expect(lg.Clone()).NotTo(BeNil())
+		})
 		It("can log Error with StackTrace", func() {
 			err := NewError("TestError", "TestError")
 			err.LogErrorWithStackTrace()
@@ -202,7 +224,8 @@ var _ = Describe("Handler", func() {
 	})
 	It("can check if a level is enabled", func() {
 		GetLogger().SetLogLevel(logger.LevelDebug)
-		handler := logger.NewHandler(GinkgoWriter, GetLogger().GetHandlerOptions())
+		opts := GetLogger().GetHandlerOptions()
+		handler := logger.NewHandler(GinkgoWriter, &opts)
 		Expect(handler.Enabled(context.Background(), logger.LevelTrace)).To(BeFalse())
 		Expect(handler.Enabled(context.Background(), logger.LevelWarn)).To(BeTrue())
 		Expect(handler.Enabled(context.Background(), logger.LevelFatal)).To(BeTrue())
@@ -231,7 +254,8 @@ var _ = Describe("Handler", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 	It("can log attributes", func() {
-		handler := logger.NewHandler(GinkgoWriter, GetLogger().GetHandlerOptions())
+		opts := GetLogger().GetHandlerOptions()
+		handler := logger.NewHandler(GinkgoWriter, &opts)
 		handler.WithAttrs([]slog.Attr{})
 		handler.WithGroup("")
 
@@ -1307,6 +1331,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		rTimeAttr.Add(slog.Time("raw_time", testTime))
 		Expect(hTimeAttr.Handle(context.Background(), rTimeAttr)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("raw_time=" + testTime.String()))
+		Expect(buf.String()).To(ContainSubstring(`raw_time="` + testTime.Format(time.RFC3339Nano) + `"`))
 
 		// Panic recovery in appendFormattedValue
 		buf.Reset()
@@ -1745,6 +1770,31 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		logger.SetHostnameFunc(func() (string, error) { return "", errors.New("hostname failed") })
 		defer logger.SetHostnameFunc(os.Hostname)
 		Expect(logger.GetEmitterIdentity()).To(Equal("localhost"))
+		Expect(logger.GetEmitterIdentity()).To(Equal("localhost"))
+	})
+
+	It("resolves and caches hostname and preserves SetEmitterIdentity overrides", func() {
+		calls := 0
+		logger.SetHostnameFunc(func() (string, error) {
+			calls++
+			return "test-cached-host", nil
+		})
+		defer logger.SetHostnameFunc(os.Hostname)
+
+		Expect(logger.GetEmitterIdentity()).To(Equal("test-cached-host"))
+		Expect(calls).To(Equal(1))
+
+		// Subsequent call reuses cached hostname without invoking hostnameFunc again
+		Expect(logger.GetEmitterIdentity()).To(Equal("test-cached-host"))
+		Expect(calls).To(Equal(1))
+
+		// SetEmitterIdentity override takes precedence
+		logger.SetEmitterIdentity("override-host")
+		Expect(logger.GetEmitterIdentity()).To(Equal("override-host"))
+
+		// Clearing override falls back to cached hostname
+		logger.SetEmitterIdentity("")
+		Expect(logger.GetEmitterIdentity()).To(Equal("test-cached-host"))
 	})
 
 	It("handles unknown KeyNode key safely", func() {
