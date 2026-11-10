@@ -28,7 +28,10 @@ var _ ConfigurationParser = &YamlConfigFSLoader{}
 //
 //nolint:errcheck // Needed for walkDir
 func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string)) {
-	fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, _ error) error {
+	fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		if !entry.Type().IsRegular() {
 			return nil
 		}
