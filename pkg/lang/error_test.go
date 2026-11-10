@@ -10,7 +10,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/BeamFoundry/rays/internal/logger"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
@@ -79,10 +78,10 @@ var _ = Describe("NilError", func() {
 		err.AddAttribute("foo", "bar")
 		err.AddAttributes("foo", "bar")
 		err.GomegaString()
-		err.Log(logger.LevelInfo, "foo", "bar")
+		err.Log(slog.LevelInfo, "foo", "bar")
 		err.LogError()
 		err.LogErrorWithStackTrace()
-		err.LogWithStackTrace(logger.LevelDebug, "foo", "bar")
+		err.LogWithStackTrace(slog.LevelDebug, "foo", "bar")
 		err.PrintStacktrace(os.Stdout)
 		fmt.Fprintf(io.Discard, "err: %+v", err)
 		//nolint:errcheck // Not testing it

@@ -7,8 +7,8 @@ import (
 	"strings"
 	_ "unsafe"
 
+	"github.com/BeamFoundry/rays/internal/boot/logger"
 	"github.com/BeamFoundry/rays/internal/container"
-	"github.com/BeamFoundry/rays/internal/logger"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/onsi/ginkgo/v2"

@@ -10,13 +10,6 @@ import (
 	"time"
 )
 
-var logger = Logger{}.New()
-
-// GetLogger returns the global default Logger instance.
-func GetLogger() *Logger {
-	return logger
-}
-
 // Logger wraps slog.Logger with support for custom log levels (Trace, Fatal),
 // dynamic format patterns, ANSI color modes, and handler configuration.
 type Logger struct {
@@ -27,6 +20,11 @@ type Logger struct {
 	output      io.Writer
 	format      string
 	formatSet   bool
+}
+
+// NewLogger initializes and returns a new Logger writing to os.Stderr with default settings.
+func NewLogger() *Logger {
+	return Logger{}.New()
 }
 
 // New initializes and returns a new Logger writing to os.Stderr with default settings.

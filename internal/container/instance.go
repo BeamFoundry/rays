@@ -4,7 +4,8 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
@@ -26,7 +27,7 @@ type Instance struct {
 }
 
 func NewInstance(beam Beam) *Instance {
-	log := logger.GetLogger().WithGroup("beam")
+	log := services.Get().Logger.WithGroup("beam")
 	instance := &Instance{beam: beam, logger: log}
 	return instance
 }

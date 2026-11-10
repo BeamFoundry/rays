@@ -6,8 +6,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/BeamFoundry/rays/internal/boot/logger"
 	"github.com/BeamFoundry/rays/internal/container"
-	"github.com/BeamFoundry/rays/internal/logger"
+	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
@@ -66,7 +67,7 @@ func GetContainer() TestingContext {
 }
 
 func GetLogger() *logger.Logger {
-	return logger.GetLogger()
+	return services.Get().Logger
 }
 
 // GetBeam() retrieve a Beam of type T (T must be a struct pointer or interface)
@@ -74,10 +75,10 @@ func GetBeam[T any]() Beam {
 	t := reflect.TypeFor[T]()
 	beams := GetContainer().FindBeams(t)
 	if len(beams) > 1 {
-		logger.GetLogger().Error("Too many Beam found", "type", t.String(), "len", len(beams))
+		services.Get().Logger.Error("Too many Beam found", "type", t.String(), "len", len(beams))
 		return nil
 		// } else if len(beams) == 0 {
-		// 	logger.GetLogger().Error("Not one Beam found", "type", t.String(), "len", len(beams))
+		// 	services.Get().Logger.Error("Not one Beam found", "type", t.String(), "len", len(beams))
 	}
 	Expect(beams).To(HaveLen(1), t.String())
 	return beams[0]
