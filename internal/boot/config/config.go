@@ -1,3 +1,5 @@
+// Package config provides hierarchical application configuration loading,
+// profile merging, overrides, type conversion, unmarshaling, and validation for Rays.
 package config
 
 import (
@@ -17,30 +19,39 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/util"
 )
 
+// re matches configuration path segments, supporting bracketed identifiers (e.g. "[foo.bar]") and words.
 var re = regexp.MustCompile(`(\[[[:word:][:space:].]+\]|\w+)`)
 
+// KeyNotFoundError represents an error when a requested configuration key path does not exist.
 type KeyNotFoundError struct {
 	*DefaultError
 }
 
+// NewKeyNotFoundError constructs a KeyNotFoundError for the given key and failing path component.
 func NewKeyNotFoundError(key, component string) *KeyNotFoundError {
 	return &KeyNotFoundError{NewError("KeyNotFoundError", "Key not found", "key", key, "components", component)}
 }
 
+// InvalidTypeKeyError represents an error when traversing a key path encounters an incompatible data type.
 type InvalidTypeKeyError struct {
 	*DefaultError
 }
 
+// NewInvalidTypeKeyError constructs an InvalidTypeKeyError for the given key and incompatible path component.
 func NewInvalidTypeKeyError(key, component string) *InvalidTypeKeyError {
 	return &InvalidTypeKeyError{NewError("InvalidTypeKeyError", "Key wrong type", "key", key, "components", component)}
 }
 
+// configDuplicator defines a configuration duplication rule from a source path to a destination path,
+// optionally scoped to an active profile.
 type configDuplicator struct {
 	from    string
 	to      string
 	profile string
 }
 
+// Config manages hierarchical configuration data, profiles, defaults, overrides,
+// and unmarshaling into strongly-typed structures.
 type Config struct {
 	logger          *logger.Logger
 	config          HashMap[string, any]
@@ -57,6 +68,7 @@ type Config struct {
 	initialized     int32
 }
 
+// NewConfigFor constructs and returns a new Config preloaded with the given configuration map.
 func NewConfigFor(m map[string]any) *Config {
 	c := NewConfig()
 	//nolint:errcheck // It will never occurre
@@ -64,6 +76,7 @@ func NewConfigFor(m map[string]any) *Config {
 	return c
 }
 
+// newConfigWithLogger creates an uninitialized Config instance sharing or using the specified logger.
 func newConfigWithLogger(l *logger.Logger) *Config {
 	return &Config{
 		configFS:        []fs.FS{},
@@ -79,17 +92,20 @@ func newConfigWithLogger(l *logger.Logger) *Config {
 	}
 }
 
-// TODO: Define configurable ConfigLoader !!!
+// NewConfig initializes and returns an empty Config container with a default logger.
 func NewConfig() *Config {
 	return newConfigWithLogger(logger.NewLogger())
 }
 
+// SetLogger replaces the logger instance used by the configuration container if non-nil.
 func (this *Config) SetLogger(l *logger.Logger) {
 	if l != nil {
 		this.logger = l
 	}
 }
 
+// Clear clears the cached merged configuration results and resets the initialization state,
+// allowing the configuration container to be re-initialized.
 func (this *Config) Clear() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -97,6 +113,8 @@ func (this *Config) Clear() {
 	atomic.StoreInt32(&this.initialized, 0)
 }
 
+// getActiveConfig returns the active configuration map: the merged result map if initialized,
+// or the raw config map otherwise.
 func (this *Config) getActiveConfig() HashMap[string, any] {
 	if this.result.Size() > 0 {
 		return this.result
@@ -104,6 +122,7 @@ func (this *Config) getActiveConfig() HashMap[string, any] {
 	return this.config
 }
 
+// Reset clears all configurations, profiles, overrides, registered filesystems, and cached state.
 func (this *Config) Reset() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -122,6 +141,8 @@ func (this *Config) Reset() {
 	this.initialized = 0
 }
 
+// AddOverride registers a key-value override that takes precedence over loaded configuration values.
+// Returns an error if the container has already been initialized.
 func (this *Config) AddOverride(key, value string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -141,6 +162,8 @@ func (this *Config) AddOverride(key, value string) Error {
 	return nil
 }
 
+// AddConfigFS registers a filesystem to load configuration files from during initialization.
+// Returns an error if the container has already been initialized.
 func (this *Config) AddConfigFS(fsys fs.FS) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -151,6 +174,8 @@ func (this *Config) AddConfigFS(fsys fs.FS) Error {
 	return nil
 }
 
+// AddDefaultConfigFS registers a filesystem providing default fallback configuration files.
+// Returns an error if the container has already been initialized.
 func (this *Config) AddDefaultConfigFS(fsys fs.FS) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -161,10 +186,13 @@ func (this *Config) AddDefaultConfigFS(fsys fs.FS) Error {
 	return nil
 }
 
+// loadDefaultConfig merges raw default configuration values into the default configuration map.
 func (this *Config) loadDefaultConfig(config map[string]any) {
 	this.defaultConfig.Merge(NewHashMapFor(config))
 }
 
+// LoadDefaultConfig merges default fallback configuration values into the container.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadDefaultConfig(config map[string]any) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -175,6 +203,7 @@ func (this *Config) LoadDefaultConfig(config map[string]any) Error {
 	return nil
 }
 
+// loadDefaultConfigAt merges default configuration values nested under a dot-delimited root key path.
 func (this *Config) loadDefaultConfigAt(config map[string]any, root string) {
 	elems := strings.Split(root, ".")
 	for _, e := range slices.Backward(elems) {
@@ -183,6 +212,8 @@ func (this *Config) loadDefaultConfigAt(config map[string]any, root string) {
 	this.loadDefaultConfig(config)
 }
 
+// LoadDefaultConfigAt merges default configuration values nested under a dot-delimited root key path.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadDefaultConfigAt(config map[string]any, root string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -193,6 +224,8 @@ func (this *Config) LoadDefaultConfigAt(config map[string]any, root string) Erro
 	return nil
 }
 
+// CopyDefaultConfig registers a duplication rule copying default configuration from one path to another.
+// Returns an error if the container has already been initialized.
 func (this *Config) CopyDefaultConfig(from, to string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -206,6 +239,8 @@ func (this *Config) CopyDefaultConfig(from, to string) Error {
 	return nil
 }
 
+// CopyDefaultConfigForProfile registers a duplication rule copying default configuration for a specific profile.
+// Returns an error if the container has already been initialized.
 func (this *Config) CopyDefaultConfigForProfile(from, to, profile string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -220,6 +255,7 @@ func (this *Config) CopyDefaultConfigForProfile(from, to, profile string) Error 
 	return nil
 }
 
+// loadConfig merges configuration entries into the raw configuration map and active result map.
 func (this *Config) loadConfig(config map[string]any) {
 	this.config.Merge(NewHashMapFor(config))
 	if this.result.Size() > 0 {
@@ -227,6 +263,8 @@ func (this *Config) loadConfig(config map[string]any) {
 	}
 }
 
+// LoadConfig merges application configuration values into the container.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadConfig(config map[string]any) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -237,6 +275,7 @@ func (this *Config) LoadConfig(config map[string]any) Error {
 	return nil
 }
 
+// loadConfigAt merges configuration values nested under a dot-delimited root key path.
 func (this *Config) loadConfigAt(config map[string]any, root string) {
 	elems := strings.Split(root, ".")
 	for _, e := range slices.Backward(elems) {
@@ -245,6 +284,8 @@ func (this *Config) loadConfigAt(config map[string]any, root string) {
 	this.loadConfig(config)
 }
 
+// LoadConfigAt merges configuration values nested under a dot-delimited root key path.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadConfigAt(config map[string]any, root string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -255,6 +296,7 @@ func (this *Config) LoadConfigAt(config map[string]any, root string) Error {
 	return nil
 }
 
+// loadConfigForProfile merges configuration values under the specified profile name.
 func (this *Config) loadConfigForProfile(config map[string]any, profile string) {
 	if p, ok := this.profileConfig.Get(profile).Get(); !ok {
 		this.profileConfig.Put(profile, NewHashMapFor(config))
@@ -263,6 +305,8 @@ func (this *Config) loadConfigForProfile(config map[string]any, profile string) 
 	}
 }
 
+// LoadConfigForProfile merges configuration values for a specific profile into the container.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadConfigForProfile(config map[string]any, profile string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -273,6 +317,7 @@ func (this *Config) LoadConfigForProfile(config map[string]any, profile string) 
 	return nil
 }
 
+// loadConfigForProfileAt merges configuration values for a profile nested under a dot-delimited root key path.
 func (this *Config) loadConfigForProfileAt(config map[string]any, profile, root string) {
 	elems := strings.Split(root, ".")
 	for _, e := range slices.Backward(elems) {
@@ -281,6 +326,8 @@ func (this *Config) loadConfigForProfileAt(config map[string]any, profile, root 
 	this.loadConfigForProfile(config, profile)
 }
 
+// LoadConfigForProfileAt merges configuration values for a profile nested under a dot-delimited root key path.
+// Returns an error if the container has already been initialized.
 func (this *Config) LoadConfigForProfileAt(config map[string]any, profile, root string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -291,6 +338,8 @@ func (this *Config) LoadConfigForProfileAt(config map[string]any, profile, root 
 	return nil
 }
 
+// SetActiveProfiles configures the list of active profile names to activate during initialization.
+// Returns an error if the container has already been initialized.
 func (this *Config) SetActiveProfiles(profiles []string) Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -301,10 +350,13 @@ func (this *Config) SetActiveProfiles(profiles []string) Error {
 	return nil
 }
 
+// ActiveProfiles returns the slice of active configuration profile names.
 func (this *Config) ActiveProfiles() []string {
 	return this.profiles
 }
 
+// GetConfigValue retrieves a string configuration value by dot-notated key path,
+// applying registered overrides and converting the value to string.
 func (this *Config) GetConfigValue(key string) (string, Error) {
 	keys := []string{}
 	for _, match := range re.FindAllStringSubmatch(key, -1) {
@@ -339,6 +391,8 @@ func (this *Config) GetConfigValue(key string) (string, Error) {
 	return c.GetConfigValue(keys[len(keys)-1])
 }
 
+// Unmarshal maps active configuration values into the fields of the target struct pointer
+// and validates the resulting structure using defined validation tags.
 func (this *Config) Unmarshal(obj any) Error {
 	t := reflect.TypeOf(obj)
 
@@ -354,6 +408,8 @@ func (this *Config) Unmarshal(obj any) Error {
 	return this.validate(obj)
 }
 
+// deepCloneMap returns an independent deep copy of the provided string-to-any map,
+// cloning any nested maps or slices recursively.
 func deepCloneMap(m map[string]any) map[string]any {
 	if m == nil {
 		return nil
@@ -365,6 +421,8 @@ func deepCloneMap(m map[string]any) map[string]any {
 	return cp
 }
 
+// deepCloneSlice returns an independent deep copy of the provided slice,
+// cloning any nested maps or slices recursively.
 func deepCloneSlice(s []any) []any {
 	if s == nil {
 		return nil
@@ -376,6 +434,8 @@ func deepCloneSlice(s []any) []any {
 	return cp
 }
 
+// deepCloneValue returns a deep copy of v if v is a map[string]any or []any,
+// or returns v unaltered if it is an immutable scalar type.
 func deepCloneValue(v any) any {
 	switch val := v.(type) {
 	case map[string]any:
@@ -387,6 +447,8 @@ func deepCloneValue(v any) any {
 	}
 }
 
+// GetSubConfig extracts and returns an isolated sub-configuration rooted at the specified
+// dot-separated key path, deep-cloning backing maps and propagating matching prefix overrides.
 func (this *Config) GetSubConfig(key string) (*Config, Error) {
 	keys := []string{}
 	for _, match := range re.FindAllStringSubmatch(key, -1) {
@@ -445,6 +507,12 @@ func (this *Config) GetSubConfig(key string) (*Config, Error) {
 	return s, nil
 }
 
+// InitConfig executes configuration initialization:
+// 1. Invokes all discovered ConfigurationParser instances on default and application filesystems.
+// 2. Merges default configurations, copies duplicated subtrees, and merges base configs.
+// 3. Merges active profile configurations into the final result map.
+//
+// Returns an error if the container has already been initialized.
 func (this *Config) InitConfig() Error {
 	this.initLock.Lock()
 	defer this.initLock.Unlock()
@@ -506,14 +574,18 @@ func (this *Config) InitConfig() Error {
 	return nil
 }
 
+// isInitialized reports whether InitConfig has already been successfully executed on this container.
 func (this *Config) isInitialized() bool {
 	return atomic.CompareAndSwapInt32(&this.initialized, 1, 1)
 }
 
+// validate runs struct tag validations on the target struct using the validator framework.
 func (this *Config) validate(obj any) Error {
 	return Validate(obj)
 }
 
+// unmarshal recursively maps nested configuration values into the target struct pointer's
+// fields, slices, and maps, applying custom type conversions and dot-notated key overrides.
 func (this *Config) unmarshal(obj any) Error {
 	convert := func(elem any, rt reflect.Type) (reflect.Value, Error) {
 		var value reflect.Value

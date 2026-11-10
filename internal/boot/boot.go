@@ -1,3 +1,5 @@
+// Package boot provides application bootstrap, configuration lifecycle
+// management, and logging initialization for Rays.
 package boot
 
 import (
@@ -15,6 +17,8 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
+// BootLoader coordinates application initialization by orchestrating configuration
+// loading, logging setup, and dependency service registration across bootstrap phases.
 type BootLoader struct {
 	*config.Config
 	loggingProperties *LoggingProperties
@@ -24,6 +28,8 @@ type BootLoader struct {
 	lock              sync.Mutex
 }
 
+// NewBootLoader creates and initializes a new BootLoader instance configured with
+// default logging properties and a quiet error-level logger for initial bootstrap.
 func NewBootLoader() *BootLoader {
 	cfg := config.NewConfig()
 	loggingDefaults := map[string]any{
@@ -50,16 +56,27 @@ func NewBootLoader() *BootLoader {
 	}
 }
 
+// SetLoggingHandler sets a custom logging handler factory function to override the
+// default slog handler constructed during bootstrap.
 func (this *BootLoader) SetLoggingHandler(handler func(io.Writer, *slog.HandlerOptions) slog.Handler) {
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.handler = handler
 }
 
+// LoggingProperties returns the unmarshaled logging configuration properties
+// populated during the bootstrap sequence, or nil if Boot has not yet been invoked.
 func (this *BootLoader) LoggingProperties() *LoggingProperties {
 	return this.loggingProperties
 }
 
+// Boot executes the bootstrap sequence:
+// 1. Initializes configuration files and profiles in a quiet phase.
+// 2. Extracts and unmarshals the "rays.logging" configuration section to reconfigure the logger.
+// 3. Registers the configured logger in the global services registry.
+// 4. Re-initializes the configuration container with full logging enabled.
+//
+// Returns an error if configuration parsing or unmarshaling fails.
 func (this *BootLoader) Boot() Error {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -108,15 +125,20 @@ func (this *BootLoader) Boot() Error {
 	return nil
 }
 
+// Logger returns the root application logger as a core.Logging instance.
 func (this *BootLoader) Logger() Logging {
 	return &logging{this.logger}
 }
 
+// LoggerForClass returns a specialized core.Logging instance configured for the package
+// or type of the provided struct pointer, respecting package-specific log level overrides.
 func (this *BootLoader) LoggerForClass(class any) Logging {
 	rtype := reflect.TypeOf(class)
 	return this.LoggerForType(rtype)
 }
 
+// LoggerForType returns a specialized core.Logging instance configured for the provided
+// reflect.Type, applying the most specific log level override defined for its package path.
 func (this *BootLoader) LoggerForType(rtype reflect.Type) Logging {
 	if this.loggingProperties == nil || rtype.Kind() != reflect.Pointer || rtype.Elem().Kind() != reflect.Struct {
 		return this.Logger()
@@ -137,6 +159,8 @@ func (this *BootLoader) LoggerForType(rtype reflect.Type) Logging {
 	return this.Logger()
 }
 
+// Reset restores the BootLoader, its underlying configuration container, and logging
+// state back to their initial unbooted condition.
 func (this *BootLoader) Reset() {
 	this.lock.Lock()
 	defer this.lock.Unlock()

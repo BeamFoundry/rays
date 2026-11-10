@@ -21,6 +21,8 @@ func init() {
 	})
 }
 
+// Validate validates struct fields on obj using go-playground/validator, dynamically
+// proxying unexported fields to shadow exported fields while preserving validation tags.
 func Validate(obj any) Error {
 	val := reflect.ValueOf(obj)
 

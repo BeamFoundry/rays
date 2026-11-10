@@ -9,7 +9,9 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
-// Convert returns a reflect.Value from an "any" value cast according to a reflect.Type
+// Convert converts a source value of any type into a reflect.Value matching target type t.
+// It supports direct assignment, time.Duration strings, []byte, encoding.TextUnmarshaler,
+// boolean conversions, and numeric string parsing and formatting.
 func Convert(value any, t reflect.Type) (reflect.Value, Error) {
 	if value == nil && t.Kind() != reflect.Pointer {
 		return reflect.Value{}, NewError("NilError", "Unable to convert pointer")
@@ -117,10 +119,12 @@ func Convert(value any, t reflect.Type) (reflect.Value, Error) {
 	return reflect.Value{}, NewError("ConvertionError", "Not a valid Type Conversion")
 }
 
+// ConvertNumeric casts a numeric value of type T1 directly to numeric type T2.
 func ConvertNumeric[T2, T1 IntegerConstraint | FloatConstraint](value T1) T2 {
 	return T2(value)
 }
 
+// ConvertStringNumeric parses a numeric string into target integer or float type T.
 func ConvertStringNumeric[T IntegerConstraint | FloatConstraint](value string) (T, Error) {
 	t := reflect.TypeFor[T]()
 	switch t.Kind() {
@@ -145,6 +149,7 @@ func ConvertStringNumeric[T IntegerConstraint | FloatConstraint](value string) (
 	}
 }
 
+// ConvertNumericString converts an integer or float value of type T into its string representation.
 func ConvertNumericString[T IntegerConstraint | FloatConstraint](value T) string {
 	t := reflect.TypeFor[T]()
 	switch t.Kind() {
