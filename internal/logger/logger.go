@@ -234,13 +234,27 @@ func (this Logger) WithGroup(name string) *Logger {
 	return &this
 }
 
-// GetHandlerOptions returns the underlying slog.HandlerOptions.
-func (this *Logger) GetHandlerOptions() *slog.HandlerOptions {
-	return this.options
+// GetHandlerOptions returns a copy of the underlying slog.HandlerOptions.
+func (this *Logger) GetHandlerOptions() slog.HandlerOptions {
+	if this.options == nil {
+		return slog.HandlerOptions{}
+	}
+	return *this.options
+}
+
+// SetHandlerOptions replaces the logger's HandlerOptions and rebuilds the underlying handler.
+func (this *Logger) SetHandlerOptions(options *slog.HandlerOptions) {
+	this.options = options
+	handler := this.handlerFunc(this.output, this.cloneOptions())
+	handler = this.applyHandlerSettings(handler)
+	this.Logger = slog.New(handler)
 }
 
 // cloneOptions returns a copy of the logger's HandlerOptions.
 func (this *Logger) cloneOptions() *slog.HandlerOptions {
+	if this.options == nil {
+		return nil
+	}
 	opts := *this.options
 	return &opts
 }

@@ -111,6 +111,8 @@ type Logging interface {
 	Fatal(msg string, args ...any)
 	// FatalContext() logs at [LevelFatal] with the given context.
 	FatalContext(ctx context.Context, msg string, args ...any)
+	// GetHandlerOptions() returns a copy of the [slog.HandlerOptions].
+	GetHandlerOptions() slog.HandlerOptions
 	// Handler() returns the slog.Handler.
 	Handler() slog.Handler
 	// Info() logs at [LevelInfo].
@@ -128,6 +130,8 @@ type Logging interface {
 	Log(ctx context.Context, level slog.Level, msg string, args ...any)
 	// LogAttrs() is a more efficient version of [Logging.Log] that accepts only [slog.Attrs].
 	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
+	// SetHandlerOptions() replaces the [slog.HandlerOptions] and rebuilds the handler.
+	SetHandlerOptions(options *slog.HandlerOptions)
 	// Trace() logs at [LevelTrace].
 	Trace(msg string, args ...any)
 	// TraceContext() logs at [LevelTrace] with the given context.

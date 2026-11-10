@@ -59,8 +59,9 @@ type groupInfo struct {
 }
 
 var (
-	emitterIdentityMu sync.RWMutex
+	emitterIdentityMu sync.Mutex
 	emitterIdentity   string
+	cachedHostname    string
 	hostnameFunc      = os.Hostname
 )
 
@@ -73,16 +74,21 @@ func SetEmitterIdentity(identity string) {
 
 // GetEmitterIdentity returns the currently configured emitter identity, or the system hostname if unset.
 func GetEmitterIdentity() string {
-	emitterIdentityMu.RLock()
-	id := emitterIdentity
-	emitterIdentityMu.RUnlock()
-	if id != "" {
-		return id
+	emitterIdentityMu.Lock()
+	defer emitterIdentityMu.Unlock()
+	if emitterIdentity != "" {
+		return emitterIdentity
 	}
-	if h, err := hostnameFunc(); err == nil && h != "" {
-		return h
+	if cachedHostname != "" {
+		return cachedHostname
 	}
-	return "localhost"
+
+	h := "localhost"
+	if host, err := hostnameFunc(); err == nil && host != "" {
+		h = host
+	}
+	cachedHostname = h
+	return cachedHostname
 }
 
 // PatternNode represents a node in the compiled log pattern AST.
@@ -1424,7 +1430,11 @@ func appendFormattedValue(buf *Buffer, v slog.Value, quote bool, isGELF ...bool)
 	case slog.KindDuration:
 		appendString(buf, v.Duration().String(), quote)
 	case slog.KindTime:
-		appendString(buf, v.Time().String(), quote)
+		if quote {
+			appendString(buf, v.Time().Format(time.RFC3339Nano), true)
+		} else {
+			appendString(buf, v.Time().String(), false)
+		}
 	case slog.KindAny:
 		if v.Any() == nil {
 			appendNilValue(buf, quote, gelfMode)
