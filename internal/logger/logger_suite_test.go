@@ -2549,6 +2549,31 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hTextGenericVal := logger.NewHandlerWithFormat(buf, optsGenericValSrc, logger.TextFormat)
 		Expect(hTextGenericVal.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("pkg.Box(server.go:42)"))
+
+		// Generic method with package separator slashes inside type arguments
+		Expect(logger.ReduceFunctionName("pkg.(*Box[example.com/model.Item]).Get")).To(Equal("pkg.Box[example.com/model.Item].Get"))
+		Expect(logger.ReduceFunctionName("github.com/BeamFoundry/rays/pkg.(*Box[example.com/model.Item]).Get")).To(Equal("g/B/rays/pkg.Box[example.com/model.Item].Get"))
+		Expect(logger.ReduceFunctionName("pkg.Box[example.com/model.Item].Get")).To(Equal("pkg.Box[example.com/model.Item].Get"))
+		Expect(logger.ReduceFunctionName("github.com/BeamFoundry/rays/pkg.Box[example.com/model.Item].Get")).To(Equal("g/B/rays/pkg.Box[example.com/model.Item].Get"))
+
+		// Text rendering of generic method with slash in type argument
+		buf.Reset()
+		optsGenericSlashSrc := &slog.HandlerOptions{
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					return slog.Any(slog.SourceKey, &slog.Source{
+						Function: "pkg.(*Box[example.com/model.Item]).Get",
+						File:     "server.go",
+						Line:     42,
+					})
+				}
+				return a
+			},
+		}
+		hTextGenericSlash := logger.NewHandlerWithFormat(buf, optsGenericSlashSrc, logger.TextFormat)
+		Expect(hTextGenericSlash.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("pkg.Box[example.com/model.Item].Get(server.go:42)"))
 	})
 
 	It("bounds functionCache so distinct valid names cannot accumulate without limit", func() {
@@ -2637,6 +2662,30 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		hUntypedNilQV := logger.NewHandlerWithFormat(buf, optsUntypedNil, `%source(%qv)`+"\n")
 		Expect(hUntypedNilQV.Handle(context.Background(), r)).To(Succeed())
 		Expect(buf.String()).To(Equal("null\n"))
+
+		// GELF JSON layouts encode nil *slog.Source as string "null"
+		buf.Reset()
+		hGELFNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, logger.GELFFormat)
+		Expect(hGELFNilSrc.Handle(context.Background(), r)).To(Succeed())
+		var jsGELFNil map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsGELFNil)).To(Succeed())
+		Expect(jsGELFNil["_source"]).To(Equal("null"))
+
+		// GELF JSON layouts encode untyped nil source as string "null"
+		buf.Reset()
+		hGELFUntypedNil := logger.NewHandlerWithFormat(buf, optsUntypedNil, logger.GELFFormat)
+		Expect(hGELFUntypedNil.Handle(context.Background(), r)).To(Succeed())
+		var jsGELFUntyped map[string]any
+		Expect(json.Unmarshal(buf.Bytes(), &jsGELFUntyped)).To(Succeed())
+		Expect(jsGELFUntyped["_source"]).To(Equal("null"))
+
+		// Preserves existing output for %"json"qv without adding another layer of quotes
+		buf.Reset()
+		hJSONQVNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `%source(%"json"qv)`+"\n")
+		Expect(hJSONQVNilSrc.Handle(context.Background(), r)).To(Succeed())
+		var strNilSrc string
+		Expect(json.Unmarshal(buf.Bytes(), &strNilSrc)).To(Succeed())
+		Expect(strNilSrc).To(Equal("null"))
 	})
 
 	It("formats ReplaceAttr source value in JSON, ECS, and Logstash layouts without reconstructing PC", func() {

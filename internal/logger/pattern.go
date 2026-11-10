@@ -1278,9 +1278,15 @@ func (ctx *renderContext) formatCurrentValue(quote bool) string {
 			return s
 		case slog.SourceKey:
 			if v.Any() == nil {
+				if ctx.isGELF {
+					return formatJsonString(strNull)
+				}
 				return formatValue(v, quote, ctx.isGELF)
 			}
 			if s, ok := v.Any().(*slog.Source); ok && s == nil {
+				if ctx.isGELF {
+					return formatJsonString(strNull)
+				}
 				return formatValue(v, quote, ctx.isGELF)
 			}
 			if v.Kind() == slog.KindString {
