@@ -244,6 +244,9 @@ func (this *Logger) GetHandlerOptions() slog.HandlerOptions {
 
 // SetHandlerOptions replaces the logger's HandlerOptions and rebuilds the underlying handler.
 func (this *Logger) SetHandlerOptions(options *slog.HandlerOptions) {
+	if options == nil {
+		options = &slog.HandlerOptions{}
+	}
 	this.options = options
 	handler := this.handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)

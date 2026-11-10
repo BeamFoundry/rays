@@ -286,6 +286,9 @@ func (n *KeyNode) Render(ctx *renderContext, buf *Buffer) {
 			a = slog.Time(slog.TimeKey, val)
 		} else {
 			a = repAttr
+			if t, ok := a.Value.Any().(defaultTimeValue); ok {
+				a.Value = slog.StringValue(t.Format("2006/01/02 15:04:05.000"))
+			}
 		}
 	case keyLevel:
 		a = ctx.rep(nil, slog.Any(slog.LevelKey, ctx.record.Level))

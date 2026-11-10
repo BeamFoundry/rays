@@ -129,10 +129,10 @@ var _ = Describe("Logger", func() {
 			getTimeValue := func(t time.Time) string {
 				attr := slog.Time(slog.TimeKey, t)
 				attr = replace([]string{}, attr)
-				return attr.Value.String()
+				return attr.Value.Resolve().Time().Format(time.RFC3339Nano)
 			}
 			testTime := time.Date(2026, 11, 5, 12, 30, 21, 123000000, time.UTC)
-			Expect(getTimeValue(testTime)).To(Equal("2026/11/05 12:30:21.123"))
+			Expect(getTimeValue(testTime)).To(Equal(testTime.Format(time.RFC3339Nano)))
 		})
 		It("can use With", func() {
 			GetLogger().With("test", "test").Trace("Test logging")

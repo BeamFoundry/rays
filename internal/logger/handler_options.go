@@ -40,7 +40,7 @@ func defaultHandlerOptions() *slog.HandlerOptions {
 			switch a.Key {
 			case slog.TimeKey:
 				if t, ok := a.Value.Any().(time.Time); ok {
-					a.Value = slog.StringValue(t.Format("2006/01/02 15:04:05.000"))
+					a.Value = slog.AnyValue(defaultTimeValue{t})
 				}
 			case slog.LevelKey:
 				if level, ok := a.Value.Any().(slog.Level); ok {
@@ -84,3 +84,9 @@ func GetHandlerOptions() *slog.HandlerOptions {
 	return handlerOptions
 }
 */
+
+// defaultTimeValue preserves user time attributes through Resolve. Only the
+// record-time renderer applies the default timestamp layout to this marker.
+type defaultTimeValue struct{ time.Time }
+
+func (v defaultTimeValue) LogValue() slog.Value { return slog.TimeValue(v.Time) }
