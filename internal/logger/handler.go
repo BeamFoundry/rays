@@ -4,11 +4,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var defaultHandlerfunc = func(output io.Writer, options *slog.HandlerOptions) slog.Handler {
@@ -18,15 +20,19 @@ var defaultHandlerfunc = func(output io.Writer, options *slog.HandlerOptions) sl
 // Handler is an slog.Handler implementation that formats log records
 // using a compiled pattern-based layout engine with ANSI color and mode support.
 type Handler struct {
-	opts    slog.HandlerOptions
-	w       io.Writer
-	mu      *sync.Mutex
-	pattern *compiledPattern
-	color   *bool
-	format  string
-	groups  []string
-	attrs   []collectedAttr
-	cfgMu   sync.RWMutex
+	opts         slog.HandlerOptions
+	w            io.Writer
+	mu           *sync.Mutex
+	pattern      *compiledPattern
+	color        *bool
+	colorChecked time.Time
+	colorEnv     [3]string
+	format       string
+	groups       []string
+	attrs        []collectedAttr
+	colorArgs    []string
+	cfgMu        sync.RWMutex
+	autoColor    bool
 }
 
 // NewHandler creates a new Handler writing to w with DefaultFormat and the given options.
@@ -79,23 +85,39 @@ func (this *Handler) SetColor(enabled bool) {
 	this.color = &enabled
 }
 
-// EnableColor automatically enables ANSI colors if the output writer is a terminal.
+// EnableColor restores AUTO mode and refreshes detection. Call it after changing
+// a writer's terminal capability to invalidate the cached result immediately.
 func (this *Handler) EnableColor() {
-	enabled := isTerminal(this.w)
 	this.cfgMu.Lock()
 	defer this.cfgMu.Unlock()
-	this.color = &enabled
+	this.color = nil
+	this.colorChecked = time.Time{}
+	this.isColorLocked()
 }
 
 // IsColor reports whether ANSI color output is currently enabled.
-// If not explicitly set via SetColor, it detects whether the output writer is a terminal.
 func (this *Handler) IsColor() bool {
-	this.cfgMu.RLock()
-	defer this.cfgMu.RUnlock()
+	this.cfgMu.Lock()
+	defer this.cfgMu.Unlock()
+	return this.isColorLocked()
+}
+
+// isColorLocked requires cfgMu. Environment/argument changes invalidate AUTO
+// detection immediately. Periodic refresh detects terminal changes on the same
+// writer (including descriptor reuse); EnableColor forces an immediate refresh.
+func (this *Handler) isColorLocked() bool {
 	if this.color != nil {
 		return *this.color
 	}
-	return isTerminal(this.w)
+	env := [3]string{os.Getenv("NO_COLOR"), os.Getenv("TERM"), os.Getenv("COLORTERM")}
+	now := time.Now()
+	if this.colorChecked.IsZero() || env != this.colorEnv || !slices.Equal(os.Args, this.colorArgs) || now.Sub(this.colorChecked) >= time.Second {
+		this.autoColor = isTerminal(this.w)
+		this.colorEnv = env
+		this.colorArgs = append(this.colorArgs[:0], os.Args...)
+		this.colorChecked = now
+	}
+	return this.autoColor
 }
 
 // clone returns a copy of the Handler sharing the original writer mutex.
@@ -148,16 +170,11 @@ func (this *Handler) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 
-	this.cfgMu.RLock()
+	this.cfgMu.Lock()
 	pattern := this.pattern
 	format := this.format
-	isColor := false
-	if this.color != nil {
-		isColor = *this.color
-	} else {
-		isColor = isTerminal(this.w)
-	}
-	this.cfgMu.RUnlock()
+	isColor := this.isColorLocked()
+	this.cfgMu.Unlock()
 
 	isJson := strings.HasPrefix(strings.TrimSpace(format), "{")
 	isGELF := strings.Contains(format, `"version":"1.1"`)
