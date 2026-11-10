@@ -943,43 +943,7 @@ var _ = Describe("PatternHandler", func() {
 		Expect(lg.IsColor()).To(BeTrue())
 
 		// On Logger with terminal output, isolated from ambient environment
-		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
-		origTerm, hasTerm := os.LookupEnv("TERM")
-		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
-		origArgs := os.Args
-		//nolint:errcheck // restoring environment in test cleanup
-		defer func() {
-			if hasNoColor {
-				os.Setenv("NO_COLOR", origNoColor)
-			} else {
-				os.Unsetenv("NO_COLOR")
-			}
-			if hasTerm {
-				os.Setenv("TERM", origTerm)
-			} else {
-				os.Unsetenv("TERM")
-			}
-			if hasColorTerm {
-				os.Setenv("COLORTERM", origColorTerm)
-			} else {
-				os.Unsetenv("COLORTERM")
-			}
-			os.Args = origArgs
-		}()
-
-		var filteredArgs []string
-		for _, arg := range os.Args {
-			trimmed := strings.TrimLeft(arg, "-")
-			if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
-				!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
-				filteredArgs = append(filteredArgs, arg)
-			}
-		}
-		os.Args = filteredArgs
-
-		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
-		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
-		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+		setupColorEnv()
 
 		termOut := &fakeTerminalWriter{Buffer: bytes.NewBuffer(nil)}
 		lg.Reset()
@@ -1038,6 +1002,46 @@ func (d *dummySetColorOnlyHandler) WithAttrs([]slog.Attr) slog.Handler        { 
 func (d *dummySetColorOnlyHandler) WithGroup(string) slog.Handler             { return d }
 func (d *dummySetColorOnlyHandler) SetColor(c bool)                           { d.color = c }
 
+func setupColorEnv() {
+	origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
+	origTerm, hasTerm := os.LookupEnv("TERM")
+	origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
+	origArgs := os.Args
+
+	DeferCleanup(func() {
+		if hasNoColor {
+			Expect(os.Setenv("NO_COLOR", origNoColor)).To(Succeed())
+		} else {
+			Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+		}
+		if hasTerm {
+			Expect(os.Setenv("TERM", origTerm)).To(Succeed())
+		} else {
+			Expect(os.Unsetenv("TERM")).To(Succeed())
+		}
+		if hasColorTerm {
+			Expect(os.Setenv("COLORTERM", origColorTerm)).To(Succeed())
+		} else {
+			Expect(os.Unsetenv("COLORTERM")).To(Succeed())
+		}
+		os.Args = origArgs
+	})
+
+	var filteredArgs []string
+	for _, arg := range os.Args {
+		trimmed := strings.TrimLeft(arg, "-")
+		if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
+			!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
+			filteredArgs = append(filteredArgs, arg)
+		}
+	}
+	os.Args = filteredArgs
+
+	Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
+	Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
+	Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+}
+
 var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	var buf *bytes.Buffer
 	testTime := time.Date(2026, 11, 7, 12, 0, 0, 123456789, time.UTC)
@@ -1068,43 +1072,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 
 		termBuf := &fakeTerminalWriter{Buffer: bytes.NewBuffer(nil)}
 		lg.SetOutput(termBuf)
-		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
-		origTerm, hasTerm := os.LookupEnv("TERM")
-		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
-		origArgs := os.Args
-		//nolint:errcheck // restoring environment in test cleanup
-		defer func() {
-			if hasNoColor {
-				os.Setenv("NO_COLOR", origNoColor)
-			} else {
-				os.Unsetenv("NO_COLOR")
-			}
-			if hasTerm {
-				os.Setenv("TERM", origTerm)
-			} else {
-				os.Unsetenv("TERM")
-			}
-			if hasColorTerm {
-				os.Setenv("COLORTERM", origColorTerm)
-			} else {
-				os.Unsetenv("COLORTERM")
-			}
-			os.Args = origArgs
-		}()
-
-		var filteredArgs []string
-		for _, arg := range os.Args {
-			trimmed := strings.TrimLeft(arg, "-")
-			if trimmed != "no-color" && trimmed != "ginkgo.no-color" &&
-				!strings.HasPrefix(trimmed, "no-color=") && !strings.HasPrefix(trimmed, "ginkgo.no-color=") {
-				filteredArgs = append(filteredArgs, arg)
-			}
-		}
-		os.Args = filteredArgs
-
-		Expect(os.Unsetenv("NO_COLOR")).To(Succeed())
-		Expect(os.Setenv("TERM", "xterm-256color")).To(Succeed())
-		Expect(os.Setenv("COLORTERM", "truecolor")).To(Succeed())
+		setupColorEnv()
 
 		lg.EnableColor()
 		Expect(lg.IsColor()).To(BeTrue())
@@ -1286,27 +1254,7 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 	})
 
 	It("covers isTerminal environment variables (NO_COLOR, TERM=dumb)", func() {
-		origNoColor, hasNoColor := os.LookupEnv("NO_COLOR")
-		origTerm, hasTerm := os.LookupEnv("TERM")
-		origColorTerm, hasColorTerm := os.LookupEnv("COLORTERM")
-		//nolint:errcheck // restoring original environment in test cleanup
-		defer func() {
-			if hasNoColor {
-				os.Setenv("NO_COLOR", origNoColor)
-			} else {
-				os.Unsetenv("NO_COLOR")
-			}
-			if hasTerm {
-				os.Setenv("TERM", origTerm)
-			} else {
-				os.Unsetenv("TERM")
-			}
-			if hasColorTerm {
-				os.Setenv("COLORTERM", origColorTerm)
-			} else {
-				os.Unsetenv("COLORTERM")
-			}
-		}()
+		setupColorEnv()
 
 		h := logger.NewHandlerWithFormat(buf, nil, "%clr(%level(%v)) %msg(%v)\n")
 
@@ -2686,6 +2634,12 @@ var _ = Describe("Logger and Pattern Coverage Edge Cases", func() {
 		var strNilSrc string
 		Expect(json.Unmarshal(buf.Bytes(), &strNilSrc)).To(Succeed())
 		Expect(strNilSrc).To(Equal("null"))
+
+		// GELF layout with unquoted %v preserves <nil> representation
+		buf.Reset()
+		hGELFUnquotedNilSrc := logger.NewHandlerWithFormat(buf, optsNilSrc, `{"version":"1.1",%source("_source":%v)}`+"\n")
+		Expect(hGELFUnquotedNilSrc.Handle(context.Background(), r)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring(`"_source":<nil>`))
 	})
 
 	It("formats ReplaceAttr source value in JSON, ECS, and Logstash layouts without reconstructing PC", func() {
