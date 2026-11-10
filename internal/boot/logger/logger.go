@@ -1,3 +1,5 @@
+// Package logger provides structured logging facilities with custom log levels,
+// pattern layouts, ANSI color support, and slog integration for Rays.
 package logger
 
 import (
