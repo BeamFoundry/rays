@@ -162,7 +162,7 @@ type BeamProvider interface {
 
 // ConfigurationParser represent the interface an object parsing a filesystems for configuration files need to implement.
 type ConfigurationParser interface {
-	ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string))
+	ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string)) Error
 }
 
 // InitializingContext represent a limited set of container functions avaiiable during a container initializing.

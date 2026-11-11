@@ -527,22 +527,26 @@ func (this *Config) InitConfig() Error {
 	for _, l := range configLoaders {
 		if loader, ok := reflect.New(l.Elem()).Interface().(ConfigurationParser); ok {
 			for _, f := range this.defaultConfigFS {
-				loader.ParseConfigurationFilesystem(f, func(m map[string]any, _ string) {
+				if err := loader.ParseConfigurationFilesystem(f, func(m map[string]any, _ string) {
 					this.loadDefaultConfig(m)
-				})
+				}); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	for _, l := range configLoaders {
 		if loader, ok := reflect.New(l.Elem()).Interface().(ConfigurationParser); ok {
 			for _, f := range this.configFS {
-				loader.ParseConfigurationFilesystem(f, func(m map[string]any, profile string) {
+				if err := loader.ParseConfigurationFilesystem(f, func(m map[string]any, profile string) {
 					if profile == "" {
 						this.loadConfig(m)
 					} else {
 						this.loadConfigForProfile(m, profile)
 					}
-				})
+				}); err != nil {
+					return err
+				}
 			}
 		}
 	}

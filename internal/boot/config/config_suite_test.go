@@ -3,8 +3,10 @@ package config_test
 import (
 	"embed"
 	"errors"
+	"fmt"
 	"io/fs"
 	"testing"
+	"testing/fstest"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -18,6 +20,31 @@ type failingFS struct{}
 
 func (failingFS) Open(_ string) (fs.File, error) {
 	return nil, errors.New("failing filesystem error")
+}
+
+type unreadableFileFS struct {
+	fs.FS
+}
+
+func (u unreadableFileFS) Open(name string) (fs.File, error) {
+	f, err := u.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	if stat.IsDir() {
+		return f, nil
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("close %s: %w", name, err)
+	}
+	return nil, errors.New("cannot read file")
 }
 
 func TestConfig(t *testing.T) {
@@ -828,17 +855,43 @@ var _ = Describe("config", func() {
 		Expect(config.DeepCloneSlice(nil)).To(BeNil())
 	})
 
-	It("handles filesystem walk errors without panic in YamlConfigFSLoader", func() {
+	It("handles filesystem walk errors without panic and returns error in YamlConfigFSLoader", func() {
 		loader := &config.YamlConfigFSLoader{}
 		called := false
-		loader.ParseConfigurationFilesystem(failingFS{}, func(_ map[string]any, _ string) {
+		err := loader.ParseConfigurationFilesystem(failingFS{}, func(_ map[string]any, _ string) {
 			called = true
 		})
+		Expect(err).To(HaveOccurred())
 		Expect(called).To(BeFalse())
 
 		c := config.NewConfig()
 		Expect(c.AddConfigFS(failingFS{})).NotTo(HaveOccurred())
-		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).To(HaveOccurred())
+	})
+
+	It("returns error for malformed YAML files and propagates through InitConfig", func() {
+		malformedFS := fstest.MapFS{
+			"application.yaml": &fstest.MapFile{
+				Data: []byte("invalid: [yaml: foo"),
+			},
+		}
+		loader := &config.YamlConfigFSLoader{}
+		err := loader.ParseConfigurationFilesystem(malformedFS, func(_ map[string]any, _ string) {})
+		Expect(err).To(HaveOccurred())
+
+		c := config.NewConfig()
+		Expect(c.AddConfigFS(malformedFS)).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).To(HaveOccurred())
+
+		cDefault := config.NewConfig()
+		Expect(cDefault.AddDefaultConfigFS(malformedFS)).NotTo(HaveOccurred())
+		Expect(cDefault.InitConfig()).To(HaveOccurred())
+	})
+
+	It("returns error when reading configuration file fails", func() {
+		loader := &config.YamlConfigFSLoader{}
+		err := loader.ParseConfigurationFilesystem(unreadableFileFS{FS: testdata}, func(_ map[string]any, _ string) {})
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("does not mutate base configuration when merging profile configs, preserving it across Clear and reinit", func() {

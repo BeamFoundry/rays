@@ -31,12 +31,33 @@ func (this *LoggingConfiguration) PostConstruct() Error {
 	return nil
 }
 
-// Logger returns a contextual Logging instance tailored to the injecting bean's package and type.
+// Logger returns a contextual Logging instance tailored to the injecting bean's package and type,
+// resolving concrete instances for interface-typed beans to retain interface or package overrides.
 func (this *LoggingConfiguration) Logger(ctx context.Context) Logging {
+	var parentType reflect.Type
 	if ct := ctx.Value(PrototypeContextParentType); ct != nil {
 		if rt, ok := ct.(reflect.Type); ok {
-			return GetContainer().LoggerForType(rt)
+			parentType = rt
 		}
+	}
+
+	var concreteType reflect.Type
+	if ci := ctx.Value(PrototypeContextParentInstance); ci != nil {
+		concreteType = reflect.TypeOf(ci)
+	}
+
+	if parentType != nil && parentType.Kind() == reflect.Interface {
+		if concreteType != nil {
+			return GetContainer().LoggerForTypes(concreteType, parentType)
+		}
+		return GetContainer().LoggerForType(parentType)
+	}
+
+	if concreteType != nil {
+		return GetContainer().LoggerForType(concreteType)
+	}
+	if parentType != nil {
+		return GetContainer().LoggerForType(parentType)
 	}
 	return GetContainer().Logger()
 }
