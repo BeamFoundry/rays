@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"testing/fstest"
 
 	"github.com/BeamFoundry/rays/internal/boot"
 	"github.com/BeamFoundry/rays/internal/boot/logger"
@@ -37,6 +38,7 @@ var _ = Describe("BootLoader", func() {
 		Expect(bl).NotTo(BeNil())
 		Expect(bl.Logger()).NotTo(BeNil())
 		Expect(bl.Config).NotTo(BeNil())
+		Expect(bl.LoggerForType(reflect.TypeFor[*DummyStruct]())).NotTo(BeNil())
 	})
 
 	It("can boot successfully with default settings", func() {
@@ -61,6 +63,7 @@ var _ = Describe("BootLoader", func() {
 				"github.com/BeamFoundry/rays/internal/boot/":     "TRACE",
 				"github.com/BeamFoundry/rays/internal/boot_test": "DEBUG",
 				"DummyStruct": "WARN",
+				"io/Reader":   "ERROR",
 			},
 		}
 		Expect(bl.LoadConfigAt(cfg, "rays.logging")).NotTo(HaveOccurred())
@@ -76,12 +79,25 @@ var _ = Describe("BootLoader", func() {
 		lg2 := bl.LoggerForType(reflect.TypeFor[*DummyStruct]())
 		Expect(lg2).NotTo(BeNil())
 
+		// Test interface-typed logger
+		lgReader := bl.LoggerForType(reflect.TypeFor[io.Reader]())
+		Expect(lgReader).NotTo(BeNil())
+
+		// Test LoggerForTypes with multiple candidates
+		lgTypes := bl.LoggerForTypes(reflect.TypeFor[*DummyStruct](), reflect.TypeFor[io.Reader]())
+		Expect(lgTypes).NotTo(BeNil())
+
 		// Test non-struct pointer and non-pointer
 		Expect(bl.LoggerForType(reflect.TypeFor[string]())).NotTo(BeNil())
 		Expect(bl.LoggerForClass("not a struct")).NotTo(BeNil())
 
 		// Test struct that does not match any configured logger
 		Expect(bl.LoggerForClass(&bytes.Buffer{})).NotTo(BeNil())
+		Expect(bl.LoggerForTypes(reflect.TypeFor[bytes.Buffer]())).NotTo(BeNil())
+
+		// Test nil type handling
+		Expect(bl.LoggerForType(nil)).NotTo(BeNil())
+		Expect(bl.LoggerForTypes(nil)).NotTo(BeNil())
 
 		// Test With and WithGroup on logging wrapper
 		withLg := lg1.With("key", "val")
@@ -164,6 +180,17 @@ var _ = Describe("BootLoader", func() {
 			"source": "invalid_bool",
 		}
 		Expect(bl.LoadConfigAt(cfg, "rays.logging")).NotTo(HaveOccurred())
+		err := bl.Boot()
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("returns error when configuration file contains malformed YAML during boot", func() {
+		malformedFS := fstest.MapFS{
+			"application.yaml": &fstest.MapFile{
+				Data: []byte("invalid: [yaml: foo"),
+			},
+		}
+		Expect(bl.AddConfigFS(malformedFS)).NotTo(HaveOccurred())
 		err := bl.Boot()
 		Expect(err).To(HaveOccurred())
 	})

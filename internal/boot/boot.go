@@ -137,22 +137,68 @@ func (this *BootLoader) LoggerForClass(class any) Logging {
 	return this.LoggerForType(rtype)
 }
 
-// LoggerForType returns a specialized core.Logging instance configured for the provided
-// reflect.Type, applying the most specific log level override defined for its package path.
-func (this *BootLoader) LoggerForType(rtype reflect.Type) Logging {
-	if this.loggingProperties == nil || rtype.Kind() != reflect.Pointer || rtype.Elem().Kind() != reflect.Struct {
-		return this.Logger()
+// matchLogLevel searches this.loggers for the first matching override for any of the given types.
+func (this *BootLoader) matchLogLevel(types ...reflect.Type) (LogLevel, bool) {
+	if this.loggingProperties == nil {
+		return LogLevel{}, false
 	}
 
-	pkg := rtype.Elem().PkgPath()
-	name := pkg + "/" + rtype.Elem().Name()
-	for _, level := range this.loggers {
-		if (!String(level).EndsWith("/") || !String(pkg).StartsWith(level)) && pkg != level && name != level {
+	type typeInfo struct {
+		pkg  string
+		name string
+	}
+
+	var infos []typeInfo
+	for _, rtype := range types {
+		if rtype == nil {
 			continue
 		}
-		this.logger.Trace("Creating specific new logger", "pkg", pkg, "name", name)
+		if rtype.Kind() == reflect.Pointer && rtype.Elem().Kind() == reflect.Struct {
+			infos = append(infos, typeInfo{
+				pkg:  rtype.Elem().PkgPath(),
+				name: rtype.Elem().PkgPath() + "/" + rtype.Elem().Name(),
+			})
+		} else if rtype.Kind() == reflect.Struct || rtype.Kind() == reflect.Interface {
+			infos = append(infos, typeInfo{
+				pkg:  rtype.PkgPath(),
+				name: rtype.PkgPath() + "/" + rtype.Name(),
+			})
+		}
+	}
+
+	if len(infos) == 0 {
+		return LogLevel{}, false
+	}
+
+	for _, level := range this.loggers {
+		for _, info := range infos {
+			if (!String(level).EndsWith("/") || !String(info.pkg).StartsWith(level)) && info.pkg != level && info.name != level {
+				continue
+			}
+			return this.loggingProperties.MapLevels()[level], true
+		}
+	}
+	return LogLevel{}, false
+}
+
+// LoggerForType returns a specialized core.Logging instance configured for the provided
+// reflect.Type, applying the most specific log level override defined for its package path or type.
+func (this *BootLoader) LoggerForType(rtype reflect.Type) Logging {
+	if logLevel, ok := this.matchLogLevel(rtype); ok {
+		this.logger.Trace("Creating specific new logger", "type", rtype.String())
 		lg := this.logger.Clone()
-		logLevel := this.loggingProperties.MapLevels()[level]
+		lg.SetLogLevel(logLevel.Level())
+		return &logging{lg}
+	}
+	return this.Logger()
+}
+
+// LoggerForTypes returns a specialized core.Logging instance configured for the first
+// matching reflect.Type among candidate types, applying the most specific log level override.
+func (this *BootLoader) LoggerForTypes(types ...reflect.Type) Logging {
+	if logLevel, ok := this.matchLogLevel(types...); ok {
+		this.logger.Trace("Creating specific new logger for types")
+		lg := this.logger.Clone()
 		lg.SetLogLevel(logLevel.Level())
 		return &logging{lg}
 	}

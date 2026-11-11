@@ -1,11 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"io/fs"
 	"regexp"
 
 	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
+	. "github.com/BeamFoundry/rays/pkg/lang"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,10 +27,9 @@ var _ ConfigurationParser = &YamlConfigFSLoader{}
 
 // ParseConfigurationFilesystem walks fsys, unmarshaling any matching YAML configuration
 // files and invoking loader with the parsed map and extracted profile name.
-//
-//nolint:errcheck // Needed for walkDir
-func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string)) {
-	fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, err error) error {
+// Returns an error if filesystem walking, file reading, or YAML unmarshaling fails.
+func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader func(m map[string]any, profile string)) Error {
+	err := fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -42,13 +43,20 @@ func (this *YamlConfigFSLoader) ParseConfigurationFilesystem(fsys fs.FS, loader 
 			return nil
 		}
 
-		if data, err := fs.ReadFile(fsys, path); err == nil {
-			config := map[string]any{}
-			if err := yaml.Unmarshal(data, &config); err == nil {
-				services.Get().Logger.Info("Loading configuration", "path", path, "profile", m[1])
-				loader(config, m[1])
-			}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
 		}
+		config := map[string]any{}
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("unmarshal %s: %w", path, err)
+		}
+		services.Get().Logger.Info("Loading configuration", "path", path, "profile", m[1])
+		loader(config, m[1])
 		return nil
 	})
+	if err != nil {
+		return NewErrorFrom(err)
+	}
+	return nil
 }

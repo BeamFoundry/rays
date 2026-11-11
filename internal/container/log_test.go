@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	_ "unsafe"
 
@@ -258,7 +259,60 @@ var _ = Describe("LoggingProperties", func() {
 		var unknownHandler container.LogHandler
 		Expect(unknownHandler.Handler()).To(BeNil())
 	})
+
+	It("resolves interface and concrete overrides in LoggingConfiguration.Logger", func() {
+		Expect(GetContainer().LoadConfigAt(map[string]any{
+			"handler": "DEFAULT",
+			"level":   "INFO",
+			"loggers": map[string]any{
+				"github.com/BeamFoundry/rays/internal/container_test/DummyLoggerInterface": "WARN",
+				"github.com/BeamFoundry/rays/internal/container_test/DummyLoggerImpl":      "DEBUG",
+			},
+		}, "rays.logging")).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).To(Succeed())
+
+		logConfig := &container.LoggingConfiguration{}
+
+		// 1. With concrete instance and interface parent type
+		ctx1 := context.WithValue(context.Background(), PrototypeContextParentType, reflect.TypeFor[DummyLoggerInterface]())
+		ctx1 = context.WithValue(ctx1, PrototypeContextParentInstance, &DummyLoggerImpl{})
+		lg1 := logConfig.Logger(ctx1)
+		Expect(lg1).NotTo(BeNil())
+
+		// 2. With interface parent type but concrete instance unavailable
+		ctx2 := context.WithValue(context.Background(), PrototypeContextParentType, reflect.TypeFor[DummyLoggerInterface]())
+		lg2 := logConfig.Logger(ctx2)
+		Expect(lg2).NotTo(BeNil())
+
+		// 3. With concrete instance only (no parent type)
+		ctx3 := context.WithValue(context.Background(), PrototypeContextParentInstance, &DummyLoggerImpl{})
+		lg3 := logConfig.Logger(ctx3)
+		Expect(lg3).NotTo(BeNil())
+
+		// 4. With pointer-to-struct parent type
+		ctx4 := context.WithValue(context.Background(), PrototypeContextParentType, reflect.TypeFor[*DummyLoggerImpl]())
+		lg4 := logConfig.Logger(ctx4)
+		Expect(lg4).NotTo(BeNil())
+
+		// 5. Empty context
+		lg5 := logConfig.Logger(context.Background())
+		Expect(lg5).NotTo(BeNil())
+	})
 })
+
+type DummyLoggerInterface interface {
+	DoLog()
+}
+
+type DummyLoggerImpl struct {
+	Logger Logging `@:"Inject"`
+}
+
+func (d *DummyLoggerImpl) DoLog() {
+	if d.Logger != nil {
+		d.Logger.Info("DoLog")
+	}
+}
 
 type fakeTerminalWriter struct {
 	*bytes.Buffer
