@@ -2,7 +2,10 @@ package boot_test
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"reflect"
 	"testing/fstest"
@@ -17,6 +20,22 @@ import (
 )
 
 type DummyStruct struct{}
+
+type failAfterLoggingInitFS struct {
+	fs.FS
+	bl *boot.BootLoader
+}
+
+func (f failAfterLoggingInitFS) Open(name string) (fs.File, error) {
+	if f.bl.LoggingProperties() != nil {
+		return nil, errors.New("phase 4 config reinit failed")
+	}
+	file, err := f.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	return file, nil
+}
 
 var _ = BeforeSuite(func() {
 	services.Get().Logger.SetOutput(GinkgoWriter)
@@ -60,10 +79,10 @@ var _ = Describe("BootLoader", func() {
 			"color":   "ON",
 			"source":  true,
 			"loggers": map[string]any{
-				"github.com/BeamFoundry/rays/internal/boot/":     "TRACE",
-				"github.com/BeamFoundry/rays/internal/boot_test": "DEBUG",
-				"DummyStruct": "WARN",
-				"io/Reader":   "ERROR",
+				"github.com/BeamFoundry/rays/internal/boot/":                 "TRACE",
+				"github.com/BeamFoundry/rays/internal/boot_test":             "DEBUG",
+				"github.com/BeamFoundry/rays/internal/boot_test/DummyStruct": "WARN",
+				"io/Reader": "ERROR",
 			},
 		}
 		Expect(bl.LoadConfigAt(cfg, "rays.logging")).NotTo(HaveOccurred())
@@ -83,9 +102,18 @@ var _ = Describe("BootLoader", func() {
 		lgReader := bl.LoggerForType(reflect.TypeFor[io.Reader]())
 		Expect(lgReader).NotTo(BeNil())
 
-		// Test LoggerForTypes with multiple candidates
+		// Test LoggerForTypes candidate order precedence
 		lgTypes := bl.LoggerForTypes(reflect.TypeFor[*DummyStruct](), reflect.TypeFor[io.Reader]())
 		Expect(lgTypes).NotTo(BeNil())
+		Expect(lgTypes.GetHandlerOptions().Level.Level()).To(Equal(slog.LevelWarn))
+
+		lgTypesReversed := bl.LoggerForTypes(reflect.TypeFor[io.Reader](), reflect.TypeFor[*DummyStruct]())
+		Expect(lgTypesReversed).NotTo(BeNil())
+		Expect(lgTypesReversed.GetHandlerOptions().Level.Level()).To(Equal(slog.LevelError))
+
+		lgTypesFallback := bl.LoggerForTypes(reflect.TypeFor[*bytes.Buffer](), reflect.TypeFor[io.Reader]())
+		Expect(lgTypesFallback).NotTo(BeNil())
+		Expect(lgTypesFallback.GetHandlerOptions().Level.Level()).To(Equal(slog.LevelError))
 
 		// Test non-struct pointer and non-pointer
 		Expect(bl.LoggerForType(reflect.TypeFor[string]())).NotTo(BeNil())
@@ -195,9 +223,21 @@ var _ = Describe("BootLoader", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("can reset properly", func() {
+	It("returns error when phase 4 config re-initialization fails after Clear", func() {
+		fsys := failAfterLoggingInitFS{
+			FS: fstest.MapFS{},
+			bl: bl,
+		}
+		Expect(bl.AddConfigFS(fsys)).NotTo(HaveOccurred())
+		err := bl.Boot()
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("can reset properly and restore standard-library default logger", func() {
 		Expect(bl.Boot()).NotTo(HaveOccurred())
+		bootedDefault := slog.Default()
 		bl.Reset()
 		Expect(bl.LoggingProperties()).To(BeNil())
+		Expect(slog.Default()).NotTo(Equal(bootedDefault))
 	})
 })
