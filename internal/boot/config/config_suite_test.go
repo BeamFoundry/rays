@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -109,6 +111,18 @@ type BookElemPointer struct {
 type TranslationMap struct {
 	en map[string]string
 	fr map[string]string
+}
+
+type FailingTextUnmarshaler struct {
+	val string
+}
+
+func (f *FailingTextUnmarshaler) UnmarshalText(text []byte) error {
+	if string(text) == "invalid" {
+		return errors.New("cannot unmarshal text")
+	}
+	f.val = string(text)
+	return nil
 }
 
 //go:embed testdata/*
@@ -486,6 +500,270 @@ var _ = Describe("config", func() {
 		subkey, err := c.GetSubConfig("favorites")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(subkey.Unmarshal(elems)).To(HaveOccurred())
+	})
+	It("can unmarshal convertible types such as int to uint and duration", func() {
+		type NumericTypes struct {
+			Count    uint16
+			Duration time.Duration
+		}
+		target := &NumericTypes{}
+		c := config.NewConfigFor(map[string]any{
+			"Count":    42,
+			"Duration": 0,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.Count).To(Equal(uint16(42)))
+		Expect(target.Duration).To(Equal(time.Duration(0)))
+	})
+	It("can unmarshal numeric types within valid boundaries", func() {
+		type BoundaryTypes struct {
+			MinInt8   int8
+			MaxInt8   int8
+			MinUint16 uint16
+			MaxUint16 uint16
+		}
+		target := &BoundaryTypes{}
+		c := config.NewConfigFor(map[string]any{
+			"MinInt8":   math.MinInt8,
+			"MaxInt8":   math.MaxInt8,
+			"MinUint16": 0,
+			"MaxUint16": math.MaxUint16,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.MinInt8).To(Equal(int8(math.MinInt8)))
+		Expect(target.MaxInt8).To(Equal(int8(math.MaxInt8)))
+		Expect(target.MinUint16).To(Equal(uint16(0)))
+		Expect(target.MaxUint16).To(Equal(uint16(math.MaxUint16)))
+	})
+	It("rejects negative-to-unsigned conversion", func() {
+		type UnsignedTarget struct {
+			Count uint16
+		}
+		target := &UnsignedTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Count": -1,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+		Expect(target.Count).To(Equal(uint16(0)))
+	})
+	It("rejects oversized-to-uint16 conversion", func() {
+		type UnsignedTarget struct {
+			Count uint16
+		}
+		target := &UnsignedTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Count": 70000,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+		Expect(target.Count).To(Equal(uint16(0)))
+	})
+	It("rejects out-of-range signed integer inputs", func() {
+		type SignedTarget struct {
+			SmallInt int8
+		}
+		target := &SignedTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"SmallInt": 128,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+
+		c2 := config.NewConfigFor(map[string]any{
+			"SmallInt": -129,
+		})
+		Expect(c2.InitConfig()).NotTo(HaveOccurred())
+		Expect(c2.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("rejects oversized unsigned-to-signed conversion", func() {
+		type Signed64Target struct {
+			Val int64
+		}
+		target := &Signed64Target{}
+		c := config.NewConfigFor(map[string]any{
+			"Val": uint64(math.MaxUint64),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("preserves parsing errors and does not assign directly", func() {
+		type DurationTarget struct {
+			Duration time.Duration
+		}
+		target := &DurationTarget{Duration: time.Second * 5}
+		c := config.NewConfigFor(map[string]any{
+			"Duration": "invalid-duration-string",
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+		Expect(target.Duration).To(Equal(time.Second * 5))
+	})
+	It("preserves UnmarshalText errors and does not assign directly", func() {
+		type TextTarget struct {
+			Custom FailingTextUnmarshaler
+		}
+		target := &TextTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Custom": "invalid",
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+		Expect(target.Custom.val).To(BeEmpty())
+	})
+	It("rejects unconvertible types in fallback", func() {
+		type IntTarget struct {
+			Age int
+		}
+		target := &IntTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Age": false,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("allows non-numeric convertible types such as bool to defined bool type", func() {
+		type MyBool bool
+		type BoolTarget struct {
+			Flag MyBool
+		}
+		target := &BoolTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Flag": true,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(bool(target.Flag)).To(BeTrue())
+	})
+	It("validates signed integer targets for int16, int32, and int", func() {
+		type SignedTargets struct {
+			I16 int16
+			I32 int32
+			I   int
+		}
+		target := &SignedTargets{}
+		c := config.NewConfigFor(map[string]any{
+			"I16": int(math.MinInt16),
+			"I32": int(math.MinInt32),
+			"I":   int64(math.MinInt),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.I16).To(Equal(int16(math.MinInt16)))
+		Expect(target.I32).To(Equal(int32(math.MinInt32)))
+		Expect(target.I).To(Equal(math.MinInt))
+
+		c1 := config.NewConfigFor(map[string]any{"I16": math.MaxInt16 + 1})
+		Expect(c1.InitConfig()).NotTo(HaveOccurred())
+		Expect(c1.Unmarshal(&SignedTargets{})).To(HaveOccurred())
+
+		c2 := config.NewConfigFor(map[string]any{"I32": int64(math.MaxInt32 + 1)})
+		Expect(c2.InitConfig()).NotTo(HaveOccurred())
+		Expect(c2.Unmarshal(&SignedTargets{})).To(HaveOccurred())
+	})
+	It("converts float to signed integer and rejects out-of-range float", func() {
+		type SignedFloatTarget struct {
+			Val int16
+		}
+		target := &SignedFloatTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Val": float64(42.0),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.Val).To(Equal(int16(42)))
+
+		cOverflow := config.NewConfigFor(map[string]any{
+			"Val": float64(1e6),
+		})
+		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("validates unsigned integer targets for uint8, uint32, uint64, and uint", func() {
+		type UnsignedTargets struct {
+			U8  uint8
+			U32 uint32
+			U64 uint64
+			U   uint
+		}
+		target := &UnsignedTargets{}
+		c := config.NewConfigFor(map[string]any{
+			"U8":  int(math.MaxUint8),
+			"U32": int(math.MaxUint16),
+			"U64": int(100),
+			"U":   int(100),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.U8).To(Equal(uint8(math.MaxUint8)))
+		Expect(target.U32).To(Equal(uint32(math.MaxUint16)))
+		Expect(target.U64).To(Equal(uint64(100)))
+		Expect(target.U).To(Equal(uint(100)))
+	})
+	It("validates unsigned-to-unsigned conversion and rejects overflow", func() {
+		type SmallUnsignedTarget struct {
+			U8 uint8
+		}
+		target := &SmallUnsignedTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"U8": uint64(200),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.U8).To(Equal(uint8(200)))
+
+		cOverflow := config.NewConfigFor(map[string]any{
+			"U8": uint64(500),
+		})
+		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("converts float to unsigned integer and rejects negative or overflow float", func() {
+		type UnsignedFloatTarget struct {
+			Val uint16
+		}
+		target := &UnsignedFloatTarget{}
+		c := config.NewConfigFor(map[string]any{
+			"Val": float64(100.0),
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.Val).To(Equal(uint16(100)))
+
+		cNeg := config.NewConfigFor(map[string]any{
+			"Val": float64(-5.0),
+		})
+		Expect(cNeg.InitConfig()).NotTo(HaveOccurred())
+		Expect(cNeg.Unmarshal(target)).To(HaveOccurred())
+
+		cOverflow := config.NewConfigFor(map[string]any{
+			"Val": float64(100000.0),
+		})
+		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
+	})
+	It("converts float types and rejects float32 overflow", func() {
+		type FloatTargets struct {
+			F32 float32
+			F64 float64
+		}
+		target := &FloatTargets{}
+		c := config.NewConfigFor(map[string]any{
+			"F32": float64(3.14),
+			"F64": 42,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(target)).NotTo(HaveOccurred())
+		Expect(target.F32).To(BeNumerically("~", float32(3.14), 0.001))
+		Expect(target.F64).To(Equal(float64(42)))
+
+		cOverflow := config.NewConfigFor(map[string]any{
+			"F32": math.MaxFloat64,
+		})
+		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
 	})
 	It("can duplicate default config", func() {
 		elems := &BookElemsMapObject{}

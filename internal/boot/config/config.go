@@ -4,7 +4,9 @@ package config
 
 import (
 	"encoding"
+	"fmt"
 	"io/fs"
+	"math"
 	"reflect"
 	"regexp"
 	"slices"
@@ -605,7 +607,20 @@ func (this *Config) unmarshal(obj any) Error {
 
 		val, err := Convert(elem, t)
 		if err != nil {
-			return value, err
+			if err.Name() != "ConvertionError" || err.Message() != "Not a valid Type Conversion" {
+				return value, err
+			}
+
+			v := reflect.ValueOf(elem)
+			if !v.IsValid() || !v.CanConvert(t) {
+				return value, NewError("ConvertionError", fmt.Sprintf("cannot convert value of type %T to %v", elem, t))
+			}
+
+			if err := checkNumericRange(v, t); err != nil {
+				return value, err
+			}
+
+			val = v.Convert(t)
 		}
 		if rt.Kind() == reflect.Pointer {
 			v := reflect.New(t)
@@ -818,6 +833,120 @@ func (this *Config) unmarshal(obj any) Error {
 
 		if value.IsValid() {
 			f.Set(value)
+		}
+	}
+	return nil
+}
+
+// checkNumericRange validates that a numeric value v can be represented within the bounds of target type t.
+func checkNumericRange(v reflect.Value, t reflect.Type) Error {
+	vKind := v.Kind()
+	tKind := t.Kind()
+
+	switch {
+	case isSignedInt(tKind):
+		return checkSignedTargetRange(v, vKind, t, tKind)
+	case isUnsignedInt(tKind):
+		return checkUnsignedTargetRange(v, vKind, t, tKind)
+	case isFloat(tKind):
+		return checkFloatTargetRange(v, vKind, tKind)
+	default:
+		return nil
+	}
+}
+
+func isSignedInt(k reflect.Kind) bool {
+	return k >= reflect.Int && k <= reflect.Int64
+}
+
+func isUnsignedInt(k reflect.Kind) bool {
+	return k >= reflect.Uint && k <= reflect.Uintptr
+}
+
+func isFloat(k reflect.Kind) bool {
+	return k == reflect.Float32 || k == reflect.Float64
+}
+
+func checkSignedTargetRange(v reflect.Value, vKind reflect.Kind, t reflect.Type, tKind reflect.Kind) Error {
+	var minInt64, maxInt64 int64
+	switch tKind {
+	case reflect.Int8:
+		minInt64, maxInt64 = math.MinInt8, math.MaxInt8
+	case reflect.Int16:
+		minInt64, maxInt64 = math.MinInt16, math.MaxInt16
+	case reflect.Int32:
+		minInt64, maxInt64 = math.MinInt32, math.MaxInt32
+	case reflect.Int64:
+		minInt64, maxInt64 = math.MinInt64, math.MaxInt64
+	default:
+		minInt64, maxInt64 = math.MinInt, math.MaxInt
+	}
+
+	if isSignedInt(vKind) {
+		val := v.Int()
+		if val < minInt64 || val > maxInt64 {
+			return NewError("ConvertionError", fmt.Sprintf("integer value %d out of range for target type %v", val, t))
+		}
+	}
+	if isUnsignedInt(vKind) {
+		val := v.Uint()
+		if maxInt64 < 0 || val > uint64(maxInt64) {
+			return NewError("ConvertionError", fmt.Sprintf("unsigned integer value %d out of range for signed target type %v", val, t))
+		}
+	}
+	if isFloat(vKind) {
+		val := v.Float()
+		if val < float64(minInt64) || val > float64(maxInt64) {
+			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for target type %v", val, t))
+		}
+	}
+	return nil
+}
+
+func checkUnsignedTargetRange(v reflect.Value, vKind reflect.Kind, t reflect.Type, tKind reflect.Kind) Error {
+	var maxUint64 uint64
+	switch tKind {
+	case reflect.Uint8:
+		maxUint64 = math.MaxUint8
+	case reflect.Uint16:
+		maxUint64 = math.MaxUint16
+	case reflect.Uint32:
+		maxUint64 = math.MaxUint32
+	case reflect.Uint64:
+		maxUint64 = math.MaxUint64
+	default:
+		maxUint64 = math.MaxUint
+	}
+
+	if isSignedInt(vKind) {
+		val := v.Int()
+		if val < 0 {
+			return NewError("ConvertionError", fmt.Sprintf("negative integer value %d cannot be converted to unsigned target type %v", val, t))
+		}
+		if uint64(val) > maxUint64 {
+			return NewError("ConvertionError", fmt.Sprintf("integer value %d out of range for unsigned target type %v", val, t))
+		}
+	}
+	if isUnsignedInt(vKind) {
+		val := v.Uint()
+		if val > maxUint64 {
+			return NewError("ConvertionError", fmt.Sprintf("unsigned integer value %d out of range for unsigned target type %v", val, t))
+		}
+	}
+	if isFloat(vKind) {
+		val := v.Float()
+		if val < 0 || val > float64(maxUint64) {
+			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for unsigned target type %v", val, t))
+		}
+	}
+	return nil
+}
+
+func checkFloatTargetRange(v reflect.Value, vKind, tKind reflect.Kind) Error {
+	if tKind == reflect.Float32 && isFloat(vKind) {
+		val := v.Float()
+		if math.Abs(val) > math.MaxFloat32 {
+			return NewError("ConvertionError", fmt.Sprintf("float value %g overflows float32", val))
 		}
 	}
 	return nil
