@@ -118,8 +118,9 @@ func (this *BootLoader) Boot() Error {
 	// 5. Reinitialize Config with the correct parameters (Phase 4)
 	this.Clear()
 	this.SetLogger(this.logger)
-	//nolint:errcheck // Phase 1 has already validated configuration loading
-	_ = this.InitConfig()
+	if err := this.InitConfig(); err != nil {
+		return err
+	}
 
 	this.logger.Debug("Config & Logging initialized")
 	return nil
@@ -137,7 +138,8 @@ func (this *BootLoader) LoggerForClass(class any) Logging {
 	return this.LoggerForType(rtype)
 }
 
-// matchLogLevel searches this.loggers for the first matching override for any of the given types.
+// matchLogLevel searches this.loggers for the first matching override for any of the given types,
+// evaluating candidate types in the order supplied and choosing the most specific matching override.
 func (this *BootLoader) matchLogLevel(types ...reflect.Type) (LogLevel, bool) {
 	if this.loggingProperties == nil {
 		return LogLevel{}, false
@@ -170,8 +172,8 @@ func (this *BootLoader) matchLogLevel(types ...reflect.Type) (LogLevel, bool) {
 		return LogLevel{}, false
 	}
 
-	for _, level := range this.loggers {
-		for _, info := range infos {
+	for _, info := range infos {
+		for _, level := range this.loggers {
 			if (!String(level).EndsWith("/") || !String(info.pkg).StartsWith(level)) && info.pkg != level && info.name != level {
 				continue
 			}
@@ -216,6 +218,7 @@ func (this *BootLoader) Reset() {
 	this.loggers = []string{}
 	this.logger.Reset()
 	this.logger.SetLogLevel(slog.LevelError)
+	this.logger.SetDefault()
 	this.SetLogger(this.logger)
 	services.Register(&services.Registry{
 		Logger: this.logger,
