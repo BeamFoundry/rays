@@ -18,6 +18,11 @@ var _ = Describe("Convert", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(v.Equal(reflect.ValueOf("42"))).To(BeTrue())
 		})
+		It("can convert nil to pointer type", func() {
+			v, err := Convert(nil, reflect.TypeFor[*string]())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v.IsNil()).To(BeTrue())
+		})
 	})
 
 	Context("Source is a string", func() {

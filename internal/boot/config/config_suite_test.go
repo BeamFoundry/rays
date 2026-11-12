@@ -98,6 +98,14 @@ type BookElemsMapEntry struct {
 	books []MapEntry[string, string]
 }
 
+type BookElemsMapEntryPointer struct {
+	books []MapEntry[string, *Book]
+}
+
+type BookElemPointer struct {
+	book *Book
+}
+
 type TranslationMap struct {
 	en map[string]string
 	fr map[string]string
@@ -352,6 +360,132 @@ var _ = Describe("config", func() {
 		Expect(elems.books[0].Key()).To(Equal("Les Miserables"))
 		Expect(elems.books[0].Value()).To(Equal("Victor Hugo"))
 		Expect(elems.books[1].Value()).To(Equal("emile zola"))
+	})
+	It("can load an object using slice of MapEntry with struct pointers", func() {
+		elems := &BookElemsMapEntryPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"favorites": map[string]any{
+				"books": []any{
+					map[string]any{"Les Miserables": lesmis},
+					map[string]any{"Germinal": germinal},
+				},
+			},
+		})
+		Expect(c.AddOverride("favorites.books.[0].value.pages", "3000")).NotTo(HaveOccurred())
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+		Expect(elems.books).To(HaveLen(2))
+		Expect(elems.books[0].Key()).To(Equal("Les Miserables"))
+		Expect(elems.books[0].Value()).NotTo(BeNil())
+		Expect(elems.books[0].Value().author).To(Equal("Victor Hugo"))
+		Expect(elems.books[0].Value().pages).To(Equal(3000))
+		Expect(*elems.books[0].Value().title).To(Equal("Les Miserables"))
+		Expect(elems.books[1].Key()).To(Equal("Germinal"))
+		Expect(elems.books[1].Value()).NotTo(BeNil())
+		Expect(elems.books[1].Value().author).To(Equal("Emile Zola"))
+	})
+	It("can handle nil struct pointer in MapEntry", func() {
+		elems := &BookElemsMapEntryPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"favorites": map[string]any{
+				"books": []any{
+					map[string]any{"Les Miserables": nil},
+				},
+			},
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+		Expect(elems.books).To(HaveLen(1))
+		Expect(elems.books[0].Key()).To(Equal("Les Miserables"))
+		Expect(elems.books[0].Value()).To(BeNil())
+	})
+	It("fails on invalid struct section in MapEntry pointer", func() {
+		elems := &BookElemsMapEntryPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"favorites": map[string]any{
+				"books": []any{
+					map[string]any{"Les Miserables": "not a struct"},
+				},
+			},
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(subkey.Unmarshal(elems)).To(HaveOccurred())
+	})
+	It("can load an object containing a pointer-to-struct field with nested section", func() {
+		elem := &BookElemPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"book": lesmis,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(elem)).NotTo(HaveOccurred())
+		Expect(elem.book).NotTo(BeNil())
+		Expect(elem.book.author).To(Equal("Victor Hugo"))
+		Expect(elem.book.pages).To(Equal(2783))
+	})
+	It("can handle nil pointer-to-struct field in an object", func() {
+		elem := &BookElemPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"book": nil,
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(elem)).NotTo(HaveOccurred())
+		Expect(elem.book).To(BeNil())
+	})
+	It("fails when pointer-to-struct field has invalid type instead of nested section", func() {
+		elem := &BookElemPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"book": "invalid-not-a-map",
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(elem)).To(HaveOccurred())
+	})
+	It("fails when nested pointer-to-struct unmarshaling fails", func() {
+		elem := &BookElemPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"book": map[string]any{
+				"pages": "not-an-int",
+			},
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		Expect(c.Unmarshal(elem)).To(HaveOccurred())
+	})
+	It("can handle nil struct pointer in map", func() {
+		elems := &BookElemsMapObjectPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"favorites": map[string]any{
+				"books": map[string]any{
+					"Nil": nil,
+				},
+			},
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subkey.Unmarshal(elems)).NotTo(HaveOccurred())
+		Expect(elems.books["Nil"]).To(BeNil())
+	})
+	It("fails when struct pointer in map has invalid section", func() {
+		elems := &BookElemsMapObjectPointer{}
+		c := config.NewConfigFor(map[string]any{
+			"favorites": map[string]any{
+				"books": map[string]any{
+					"Bad": "not-a-map",
+				},
+			},
+		})
+		Expect(c.InitConfig()).NotTo(HaveOccurred())
+		subkey, err := c.GetSubConfig("favorites")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subkey.Unmarshal(elems)).To(HaveOccurred())
 	})
 	It("can duplicate default config", func() {
 		elems := &BookElemsMapObject{}

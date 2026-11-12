@@ -598,13 +598,13 @@ func (this *Config) unmarshal(obj any) Error {
 
 		if t.Kind() == reflect.Pointer {
 			if elem == nil {
-				return value, nil
+				return reflect.Zero(rt), nil
 			}
 			t = t.Elem()
 		}
 
 		val, err := Convert(elem, t)
-		if err != nil && err.Name() != "ConvertionError" {
+		if err != nil {
 			return value, err
 		}
 		if rt.Kind() == reflect.Pointer {
@@ -625,6 +625,23 @@ func (this *Config) unmarshal(obj any) Error {
 				if err := s.unmarshal(f.Addr().Interface()); err != nil {
 					return err
 				}
+			}
+			continue
+		}
+		if field.Type.Kind() == reflect.Pointer &&
+			field.Type.Elem().Kind() == reflect.Struct &&
+			!field.Type.Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) &&
+			!field.Type.Elem().Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) {
+			if _, ok := this.getActiveConfig().Get(field.Name).Get(); ok {
+				s, err := this.GetSubConfig("[" + field.Name + "]")
+				if err != nil {
+					return err
+				}
+				ptr := reflect.New(field.Type.Elem())
+				if err := s.unmarshal(ptr.Interface()); err != nil {
+					return err
+				}
+				f.Set(ptr)
 			}
 			continue
 		}
@@ -734,12 +751,18 @@ func (this *Config) unmarshal(obj any) Error {
 			case field.Type.Elem().Kind() == reflect.Pointer &&
 				field.Type.Elem().Elem().Kind() == reflect.Struct &&
 				!field.Type.Elem().Elem().Implements(reflect.TypeFor[encoding.TextUnmarshaler]()):
-				for k := range s.config.Iterator() {
+				for k, v := range s.config.Iterator() {
+					if v == nil {
+						m.SetMapIndex(reflect.ValueOf(k), reflect.Zero(field.Type.Elem()))
+						continue
+					}
+					e, err := s.GetSubConfig("[" + k + "]")
+					if err != nil {
+						return err
+					}
 					ptr := reflect.New(field.Type.Elem().Elem())
-					if e, err := s.GetSubConfig("[" + k + "]"); err == nil {
-						if err := e.unmarshal(ptr.Interface()); err != nil {
-							return err
-						}
+					if err := e.unmarshal(ptr.Interface()); err != nil {
+						return err
 					}
 					m.SetMapIndex(reflect.ValueOf(k), ptr)
 				}
@@ -777,6 +800,7 @@ func (this *Config) unmarshal(obj any) Error {
 				}
 			}
 			f.Set(m)
+			continue
 		}
 		var value reflect.Value
 		override := String(field.Name).ToLowerCase().String()
