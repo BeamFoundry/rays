@@ -13,7 +13,10 @@ import (
 // It supports direct assignment, time.Duration strings, []byte, encoding.TextUnmarshaler,
 // boolean conversions, and numeric string parsing and formatting.
 func Convert(value any, t reflect.Type) (reflect.Value, Error) {
-	if value == nil && t.Kind() != reflect.Pointer {
+	if value == nil {
+		if t.Kind() == reflect.Pointer {
+			return reflect.Zero(t), nil
+		}
 		return reflect.Value{}, NewError("NilError", "Unable to convert pointer")
 	}
 	if reflect.TypeOf(value).AssignableTo(t) {
