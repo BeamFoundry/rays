@@ -605,13 +605,13 @@ var _ = Describe("config", func() {
 		type TextTarget struct {
 			Custom FailingTextUnmarshaler
 		}
-		target := &TextTarget{}
+		target := &TextTarget{Custom: FailingTextUnmarshaler{val: "original"}}
 		c := config.NewConfigFor(map[string]any{
 			"Custom": "invalid",
 		})
 		Expect(c.InitConfig()).NotTo(HaveOccurred())
 		Expect(c.Unmarshal(target)).To(HaveOccurred())
-		Expect(target.Custom.val).To(BeEmpty())
+		Expect(target.Custom.val).To(Equal("original"))
 	})
 	It("rejects unconvertible types in fallback", func() {
 		type IntTarget struct {
@@ -680,6 +680,36 @@ var _ = Describe("config", func() {
 		})
 		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
 		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
+
+		cNaN := config.NewConfigFor(map[string]any{
+			"Val": math.NaN(),
+		})
+		Expect(cNaN.InitConfig()).NotTo(HaveOccurred())
+		Expect(cNaN.Unmarshal(target)).To(HaveOccurred())
+
+		type Signed64FloatTarget struct {
+			Val int64
+		}
+		target64 := &Signed64FloatTarget{}
+		cOverflow64 := config.NewConfigFor(map[string]any{
+			"Val": float64(math.MaxInt64),
+		})
+		Expect(cOverflow64.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflow64.Unmarshal(target64)).To(HaveOccurred())
+
+		cValid64 := config.NewConfigFor(map[string]any{
+			"Val": float64(math.MaxInt64 - 2048),
+		})
+		Expect(cValid64.InitConfig()).NotTo(HaveOccurred())
+		Expect(cValid64.Unmarshal(target64)).NotTo(HaveOccurred())
+		Expect(target64.Val).To(Equal(int64(9223372036854773760)))
+
+		cValidMin64 := config.NewConfigFor(map[string]any{
+			"Val": float64(math.MinInt64),
+		})
+		Expect(cValidMin64.InitConfig()).NotTo(HaveOccurred())
+		Expect(cValidMin64.Unmarshal(target64)).NotTo(HaveOccurred())
+		Expect(target64.Val).To(Equal(int64(math.MinInt64)))
 	})
 	It("validates unsigned integer targets for uint8, uint32, uint64, and uint", func() {
 		type UnsignedTargets struct {
@@ -743,6 +773,29 @@ var _ = Describe("config", func() {
 		})
 		Expect(cOverflow.InitConfig()).NotTo(HaveOccurred())
 		Expect(cOverflow.Unmarshal(target)).To(HaveOccurred())
+
+		cNaN := config.NewConfigFor(map[string]any{
+			"Val": math.NaN(),
+		})
+		Expect(cNaN.InitConfig()).NotTo(HaveOccurred())
+		Expect(cNaN.Unmarshal(target)).To(HaveOccurred())
+
+		type Unsigned64FloatTarget struct {
+			Val uint64
+		}
+		targetU64 := &Unsigned64FloatTarget{}
+		cOverflowU64 := config.NewConfigFor(map[string]any{
+			"Val": float64(math.MaxUint64),
+		})
+		Expect(cOverflowU64.InitConfig()).NotTo(HaveOccurred())
+		Expect(cOverflowU64.Unmarshal(targetU64)).To(HaveOccurred())
+
+		cValidU64 := config.NewConfigFor(map[string]any{
+			"Val": float64(math.MaxUint64 - 4096),
+		})
+		Expect(cValidU64.InitConfig()).NotTo(HaveOccurred())
+		Expect(cValidU64.Unmarshal(targetU64)).NotTo(HaveOccurred())
+		Expect(targetU64.Val).To(Equal(uint64(18446744073709547520)))
 	})
 	It("converts float types and rejects float32 overflow", func() {
 		type FloatTargets struct {
