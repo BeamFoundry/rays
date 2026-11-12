@@ -896,7 +896,10 @@ func checkSignedTargetRange(v reflect.Value, vKind reflect.Kind, t reflect.Type,
 	}
 	if isFloat(vKind) {
 		val := v.Float()
-		if val < float64(minInt64) || val > float64(maxInt64) {
+		if math.IsNaN(val) {
+			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for target type %v", val, t))
+		}
+		if val < float64(minInt64) || (maxInt64 == math.MaxInt64 && val >= float64(maxInt64)) || (maxInt64 < math.MaxInt64 && val > float64(maxInt64)) {
 			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for target type %v", val, t))
 		}
 	}
@@ -935,7 +938,10 @@ func checkUnsignedTargetRange(v reflect.Value, vKind reflect.Kind, t reflect.Typ
 	}
 	if isFloat(vKind) {
 		val := v.Float()
-		if val < 0 || val > float64(maxUint64) {
+		if math.IsNaN(val) {
+			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for unsigned target type %v", val, t))
+		}
+		if val < 0 || (maxUint64 == math.MaxUint64 && val >= float64(maxUint64)) || (maxUint64 < math.MaxUint64 && val > float64(maxUint64)) {
 			return NewError("ConvertionError", fmt.Sprintf("float value %g out of range for unsigned target type %v", val, t))
 		}
 	}
