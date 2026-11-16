@@ -269,6 +269,7 @@ var _ = Describe("Errors", func() {
 		Expect(instance.Create(context.Background())).To(HaveOccurred())
 		Expect(instance.Inject()).To(HaveOccurred())
 		Expect(instance.Initialize()).To(HaveOccurred())
+		Expect(instance.InitializeWithContext(context.Background())).To(HaveOccurred())
 	})
 	It("can error on injecting or initializing a non created instance", func() {
 		beam := NewBeamFor((&BeamWithValue{}).WithValue("test"))
@@ -277,6 +278,7 @@ var _ = Describe("Errors", func() {
 		instance := GetContainer().GetBeamDefaultInstance(beam)
 		Expect(instance.Inject()).To(HaveOccurred())
 		Expect(instance.Initialize()).To(HaveOccurred())
+		Expect(instance.InitializeWithContext(context.Background())).To(HaveOccurred())
 	})
 	It("can error on creating beam after initialize", func() {
 		AddBeamFor((&BeamWithValue{}).WithValue("test"))
