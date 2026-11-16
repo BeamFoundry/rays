@@ -38,12 +38,12 @@ type PrototypeContextKeyType string
 const (
 	// PrototypeContextParentType represent the key used in the context to indicate a parent [reflect.Type].
 	//
-	// Please see [BeamPostConstructWithContext].
+	// Please see [BeamPrototypeWithContext].
 	PrototypeContextParentType PrototypeContextKeyType = "prototypeContextParentType"
 
 	// PrototypeContextParentInstance represent the key used in the context to indicate a parent instance (any).
 	//
-	// Please see [BeamPostConstructWithContext].
+	// Please see [BeamPrototypeWithContext].
 	PrototypeContextParentInstance PrototypeContextKeyType = "prototypeContextParentInstance"
 
 	// PrototypeContextProxyType is a predefined key to be used in a context to represent an additional

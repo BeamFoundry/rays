@@ -328,19 +328,10 @@ func (this *Registry) GetBeamScopedInstance(ctx context.Context, beam Beam, pare
 	err := Try(func() {
 		RaiseErr(beamInstance.Create(ctx))
 		RaiseErr(beamInstance.Inject())
-		RaiseErr(beamInstance.Initialize())
+		RaiseErr(beamInstance.InitializeWithContext(ctx))
 	})
 	if err != nil {
 		return nil, err
-	}
-	if this.isChildBeam(beam) {
-		return beamInstance, nil
-	}
-	instance := beamInstance.Get()
-	if post, ok := instance.(BeamPostConstructWithContext); ok {
-		if err := post.WithContext(ctx); err != nil {
-			return nil, err
-		}
 	}
 	return beamInstance, nil
 }

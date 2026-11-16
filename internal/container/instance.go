@@ -199,18 +199,22 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 	return nil
 }
 
-func (this *Instance) Initialize() Error {
+func (this *Instance) prepareInitialize() (bool, Error) {
 	if this.status.Compare(InstanceStatus{}.New().INITIALIZED) >= 0 {
-		return NewError("InstanceError", "Instance already initialized")
+		return false, NewError("InstanceError", "Instance already initialized")
 	} else if this.status.Compare(InstanceStatus{}.New().INJECTED) < 0 {
-		return NewError("InstanceError", "Instance not injected")
+		return false, NewError("InstanceError", "Instance not injected")
 	}
 
 	if this.beam.Type().Kind() == reflect.Interface && GetContainer().IsChildBeam(this.beam) {
 		this.status = InstanceStatus{}.New().INITIALIZED
 		this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
-		return nil
+		return true, nil
 	}
+	return false, nil
+}
+
+func (this *Instance) initializePostConstruct() Error {
 	for i := range this.beam.Type().Elem().NumField() {
 		field := this.beam.Type().Elem().Field(i)
 		if field.Anonymous && field.Type.Kind() == reflect.Struct {
@@ -232,6 +236,38 @@ func (this *Instance) Initialize() Error {
 
 	this.status = InstanceStatus{}.New().INITIALIZED
 	return nil
+}
+
+func (this *Instance) Initialize() Error {
+	if done, err := this.prepareInitialize(); err != nil || done {
+		return err
+	}
+	// Prototype default instances have no request context; scoped instances run hooks via InitializeWithContext.
+	if this.beam.Scope() == (BeamScope{}.New().PROTOTYPE) {
+		this.status = InstanceStatus{}.New().INITIALIZED
+		return nil
+	}
+	return this.initializePostConstruct()
+}
+
+// InitializeWithContext initializes a scoped Prototype instance by running
+// BeamPrototypeWithContext.WithContext(ctx), then embedded InnerBeamPostConstruct hooks,
+// and finally BeamPostConstruct.PostConstruct().
+//
+//nolint:contextcheck // False positive
+func (this *Instance) InitializeWithContext(ctx context.Context) Error {
+	if done, err := this.prepareInitialize(); err != nil || done {
+		return err
+	}
+	if this.beam.Scope() == (BeamScope{}.New().PROTOTYPE) {
+		if post, ok := this.instance.(BeamPrototypeWithContext); ok {
+			if err := post.WithContext(ctx); err != nil {
+				return err
+			}
+			this.logger.Trace("Prototype context initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
+		}
+	}
+	return this.initializePostConstruct()
 }
 
 func (this *Instance) InitializeWithParent(parent any) Error {

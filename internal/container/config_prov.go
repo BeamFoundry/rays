@@ -75,7 +75,7 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 			services.Get().Logger.Debug("Adding Singleton Beam", "qualifier", qualifier, "type", mt.Type.Out(0))
 		}
 
-		// TODO: Exclude if Prototype and type implements BeamPostConstructWithContext
+		// TODO: Exclude if Prototype and type implements BeamPrototypeWithContext
 		foundry := func(ctx context.Context) (any, Error) {
 			instance := container.GetInstance(parent)
 			md := reflect.ValueOf(instance).Method(mt.Index)

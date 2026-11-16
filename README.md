@@ -470,6 +470,83 @@ func (d *NotificationDispatcher) Dispatch (serverName string) {
 }
 ```
 
+## Lifecycle Management
+
+Rays uses a strict, deterministic phase model to ensure application stability.
+
+### Phase 1: Instantiation & Wiring
+1. The container scans for all embedded stereotypes.
+2. It calls `New()` on structs that implement it to set up initial state.
+3. It maps `ConfigurationProperties` from YAML.
+4. It resolves all `@:"Inject"` tags and assigns pointers (or interface references).
+
+*Note: Because no business logic runs in Phase 1, Rays natively handles **Circular Dependencies** between singletons.*
+
+### Phase 2: Initialization (`WithContext` & `PostConstruct`)
+
+Once everything is wired, the container executes initialization hooks. Rays provides three initialization interfaces in `pkg/core`:
+
+* **`BeamPrototypeWithContext`**: `WithContext(ctx context.Context) Error` — for `Prototype` Beams to receive the creation `context.Context`.
+* **`InnerBeamPostConstruct`**: `PostConstruct(parent any) Error` — for anonymous embedded structs. The container passes a pointer to the parent struct that embedded it.
+* **`BeamPostConstruct`**: `PostConstruct() Error` — for the Beam itself.
+
+Depending on the Beam scope, hooks execute in a strict deterministic order:
+
+* **Singleton Beams**:
+  1. `InnerBeamPostConstruct.PostConstruct(parent any) Error` on any embedded structs.
+  2. `BeamPostConstruct.PostConstruct() Error` on the Beam itself (if defined).
+* **Prototype Beams** (run each time an instance is forged or injected):
+  1. `BeamPrototypeWithContext.WithContext(ctx context.Context) Error` on the Beam (if defined).
+  2. `InnerBeamPostConstruct.PostConstruct(parent any) Error` on any embedded structs (if defined).
+  3. `BeamPostConstruct.PostConstruct() Error` on the Beam itself (if defined).
+
+If any hook returns an `Error`, initialization stops immediately and subsequent hooks are not called.
+
+## Prototypes & Foundries
+
+If you need a new instance of an object every time it is requested (e.g., per HTTP request, per gRPC stream), embed `Prototype` and inject a `Foundry[T]`:
+
+```go
+import (
+    "context"
+    "net/http"
+    . "github.com/BeamFoundry/rays/pkg/core"
+    . "github.com/BeamFoundry/rays/pkg/lang"
+)
+
+type SessionState struct {
+    Component
+    Prototype
+    userID string
+}
+
+// 1. Optional: Receive context when forged (BeamPrototypeWithContext)
+func (s *SessionState) WithContext(ctx context.Context) Error {
+    s.userID = ctx.Value("userID").(string)
+    return nil
+}
+
+// 2. Optional: Validate or finalize state after WithContext and embedded InnerBeamPostConstruct hooks (BeamPostConstruct)
+func (s *SessionState) PostConstruct() Error {
+    if s.userID == "" {
+        return NewError("SessionError", "missing userID in context")
+    }
+    return nil
+}
+
+type AuthMiddleware struct {
+    Service
+    sessionFactory Foundry[*SessionState] `@:"Inject"`
+    logger         Logging                `@:"Inject"`
+}
+
+func (m *AuthMiddleware) HandleHTTP(req *http.Request) {
+    // Forge a brand new instance: runs WithContext -> InnerBeamPostConstruct -> PostConstruct
+    session, _ := m.sessionFactory.Forge(req.Context())
+    m.logger.Info("Handle HTTP connection", "userID", session.userID)
+}
+```
+
 ## Configuration and Profiles
 
 In enterprise applications, configuration and environment management go hand-in-hand.

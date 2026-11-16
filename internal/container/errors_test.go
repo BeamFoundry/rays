@@ -98,6 +98,72 @@ type BeamWithPointerOfPrototypeWithContextError struct {
 	beam *BeamPrototypeWithContextError `@:"Inject"`
 }
 
+type PrototypeErrorTracker struct {
+	calls []string
+}
+
+type PrototypeInnerErrorHook struct{}
+
+func (this *PrototypeInnerErrorHook) PostConstruct(parent any) Error {
+	if p, ok := parent.(*BeamPrototypeStageError); ok {
+		p.recordCall("InnerPostConstruct")
+		if p.failInner {
+			return NewError("InnerError", "inner failed")
+		}
+	}
+	return nil
+}
+
+type BeamPrototypeStageError struct {
+	Component
+	Prototype
+	PrototypeInnerErrorHook
+	tracker   *PrototypeErrorTracker
+	failCtx   bool
+	failInner bool
+	failPost  bool
+}
+
+func (this *BeamPrototypeStageError) recordCall(name string) {
+	if this.tracker != nil {
+		this.tracker.calls = append(this.tracker.calls, name)
+	}
+}
+
+func (this *BeamPrototypeStageError) WithContext(ctx context.Context) Error {
+	if tracker, ok := ctx.Value(trackerKey).(*PrototypeErrorTracker); ok {
+		this.tracker = tracker
+	}
+	if mode, ok := ctx.Value(keyValue).(string); ok {
+		switch mode {
+		case "ctx":
+			this.failCtx = true
+		case "inner":
+			this.failInner = true
+		case "post":
+			this.failPost = true
+		default:
+		}
+	}
+	this.recordCall("WithContext")
+	if this.failCtx {
+		return NewError("ContextError", "context failed")
+	}
+	return nil
+}
+
+func (this *BeamPrototypeStageError) PostConstruct() Error {
+	this.recordCall("PostConstruct")
+	if this.failPost {
+		return NewError("PostConstructError", "postconstruct failed")
+	}
+	return nil
+}
+
+type trackerKeyType string
+
+var trackerKey trackerKeyType = "tracker"
+
 type BeamRefusedBeam struct {
 	Configuration
 	ConditionalOnMissingBeam
@@ -259,6 +325,34 @@ var _ = Describe("Errors", func() {
 		AddBeamFor(&BeamWithPointerOfPrototypeWithContextError{})
 		err := GetContainer().Initialize()
 		Expect(err).To(HaveOccurred())
+	})
+	It("stops prototype lifecycle on error at each stage", func() {
+		AddBeamFor(&BeamPrototypeStageError{})
+		AddBeamFor(&BeamWithFoundry[*BeamPrototypeStageError]{})
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		foundry := GetBeamDefaultInstance[*BeamWithFoundry[*BeamPrototypeStageError]]().GetFoundry()
+
+		trackerCtx := &PrototypeErrorTracker{}
+		ctx := context.WithValue(context.WithValue(context.Background(), keyValue, "ctx"), trackerKey, trackerCtx)
+		_, err := foundry.Forge(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Name()).To(Equal("ContextError"))
+		Expect(trackerCtx.calls).To(Equal([]string{"WithContext"}))
+
+		trackerInner := &PrototypeErrorTracker{}
+		ctx = context.WithValue(context.WithValue(context.Background(), keyValue, "inner"), trackerKey, trackerInner)
+		_, err = foundry.Forge(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Name()).To(Equal("InnerError"))
+		Expect(trackerInner.calls).To(Equal([]string{"WithContext", "InnerPostConstruct"}))
+
+		trackerPost := &PrototypeErrorTracker{}
+		ctx = context.WithValue(context.WithValue(context.Background(), keyValue, "post"), trackerKey, trackerPost)
+		_, err = foundry.Forge(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Name()).To(Equal("PostConstructError"))
+		Expect(trackerPost.calls).To(Equal([]string{"WithContext", "InnerPostConstruct", "PostConstruct"}))
 	})
 	It("can log error if set profile after initialize", func() {
 		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())

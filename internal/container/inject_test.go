@@ -226,6 +226,136 @@ var _ = Describe("Foundry", func() {
 	})
 })
 
+type PrototypeLifecycleInner struct {
+	injected *BeamWithValue `@:"Inject"`
+	parentOK bool
+}
+
+func (this *PrototypeLifecycleInner) PostConstruct(parent any) Error {
+	if p, ok := parent.(*BeamPrototypeFullLifecycle); ok {
+		if this.injected != nil && len(p.calls) == 1 && p.calls[0] == "WithContext" {
+			this.parentOK = true
+		}
+		p.calls = append(p.calls, "InnerPostConstruct:"+p.ctxValue+":"+this.injected.GetValue())
+	}
+	return nil
+}
+
+type BeamPrototypeFullLifecycle struct {
+	Component
+	Prototype
+	PrototypeLifecycleInner
+	ctxValue string
+	calls    []string
+}
+
+var (
+	_ BeamPrototypeWithContext = &BeamPrototypeFullLifecycle{}
+	_ InnerBeamPostConstruct   = &PrototypeLifecycleInner{}
+	_ BeamPostConstruct        = &BeamPrototypeFullLifecycle{}
+)
+
+func (this *BeamPrototypeFullLifecycle) WithContext(ctx context.Context) Error {
+	if value, ok := ctx.Value(keyValue).(string); ok {
+		this.ctxValue = value
+	} else {
+		this.ctxValue = "default"
+	}
+	this.calls = append(this.calls, "WithContext")
+	return nil
+}
+
+func (this *BeamPrototypeFullLifecycle) PostConstruct() Error {
+	if this.ctxValue == "" || !this.parentOK {
+		return NewError("LifecycleOrderError", "WithContext or InnerBeamPostConstruct did not run before PostConstruct")
+	}
+	this.calls = append(this.calls, "PostConstruct")
+	return nil
+}
+
+type BeamWithDirectPrototypeLifecycle struct {
+	Component
+	proto *BeamPrototypeFullLifecycle `@:"Inject"`
+}
+
+type BeamPrototypeConfigLifecycle struct {
+	Configuration
+}
+
+func (this *BeamPrototypeConfigLifecycle) ProvideProto(_ context.Context) *BeamPrototypeFullLifecycle {
+	return &BeamPrototypeFullLifecycle{}
+}
+
+var _ = Describe("Prototype Lifecycle Order", func() {
+	It("calls WithContext, then InnerBeamPostConstruct, then PostConstruct via Foundry", func() {
+		AddBeamFor((&BeamWithValue{}).WithValue("dep"))
+		AddBeamFor(&BeamPrototypeFullLifecycle{})
+		AddBeamFor(&BeamWithFoundry[*BeamPrototypeFullLifecycle]{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		instance := GetBeamDefaultInstance[*BeamWithFoundry[*BeamPrototypeFullLifecycle]]()
+
+		first, err := instance.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "first"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first.parentOK).To(BeTrue())
+		Expect(first.calls).To(Equal([]string{
+			"WithContext",
+			"InnerPostConstruct:first:dep",
+			"PostConstruct",
+		}))
+
+		second, err := instance.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "second"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second).NotTo(BeIdenticalTo(first))
+		Expect(second.parentOK).To(BeTrue())
+		Expect(second.calls).To(Equal([]string{
+			"WithContext",
+			"InnerPostConstruct:second:dep",
+			"PostConstruct",
+		}))
+	})
+
+	It("calls WithContext, then InnerBeamPostConstruct, then PostConstruct on direct injection", func() {
+		AddBeamFor((&BeamWithValue{}).WithValue("dep"))
+		AddBeamFor(&BeamPrototypeFullLifecycle{})
+		AddBeamFor(&BeamWithDirectPrototypeLifecycle{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		parent := GetBeamDefaultInstance[*BeamWithDirectPrototypeLifecycle]()
+		Expect(parent.proto).NotTo(BeNil())
+		Expect(parent.proto.parentOK).To(BeTrue())
+		Expect(parent.proto.calls).To(Equal([]string{
+			"WithContext",
+			"InnerPostConstruct:default:dep",
+			"PostConstruct",
+		}))
+	})
+
+	It("calls WithContext, then InnerBeamPostConstruct, then PostConstruct for Configuration prototype beam", func() {
+		AddBeamFor((&BeamWithValue{}).WithValue("dep"))
+		AddBeamFor(&BeamPrototypeConfigLifecycle{})
+		AddBeamFor(&BeamWithFoundry[*BeamPrototypeFullLifecycle]{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		instance := GetBeamDefaultInstance[*BeamWithFoundry[*BeamPrototypeFullLifecycle]]()
+
+		forged, err := instance.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "cfg"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(forged.parentOK).To(BeTrue())
+		Expect(forged.calls).To(Equal([]string{
+			"WithContext",
+			"InnerPostConstruct:cfg:dep",
+			"PostConstruct",
+		}))
+	})
+})
+
 type BeamWithQualifier struct {
 	Component
 	beam1 *BeamWithValue `@:"Inject,Qualifier{beam1}"`

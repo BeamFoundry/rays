@@ -15,15 +15,35 @@ Rays uses a strict, deterministic phase model to ensure application stability.
 
 *Note: Because no business logic runs in Phase 1, Rays natively handles **Circular Dependencies** between singletons.*
 
-## Phase 2: Initialization (`PostConstruct`)
+## Phase 2: Initialization (`WithContext` & `PostConstruct`)
 
-Once everything is wired, the container executes PostConstruct hooks. This is where you validate config, open connections, etc...
+Once everything is wired, the container executes initialization hooks. This is where you bind request context, validate config, open connections, etc.
+
+### Lifecycle Interfaces & Execution Order
+
+Rays provides three initialization interfaces in `pkg/core`:
+
+* **`BeamPrototypeWithContext`**: `WithContext(ctx context.Context) Error` — for `Prototype` Beams to receive the creation `context.Context` (including `PrototypeContextParentType` and `PrototypeContextParentInstance`).
+* **`InnerBeamPostConstruct`**: `PostConstruct(parent any) Error` — for anonymous embedded structs. The container passes a pointer to the parent struct that embedded it, which is powerful for building generic base modules.
+* **`BeamPostConstruct`**: `PostConstruct() Error` — for the Beam itself.
+
+Depending on the Beam scope, hooks execute in a strict deterministic order:
+
+* **Singleton Beams**:
+  1. `InnerBeamPostConstruct.PostConstruct(parent any) Error` on any embedded structs.
+  2. `BeamPostConstruct.PostConstruct() Error` on the Beam itself (if defined).
+* **Prototype Beams** (run each time an instance is forged or injected):
+  1. `BeamPrototypeWithContext.WithContext(ctx context.Context) Error` on the Beam (if defined).
+  2. `InnerBeamPostConstruct.PostConstruct(parent any) Error` on any embedded structs (if defined).
+  3. `BeamPostConstruct.PostConstruct() Error` on the Beam itself (if defined).
+
+If any hook returns an `Error`, initialization stops immediately and subsequent hooks are not called.
 
 ### Standard Hooks vs Hierarchical Hooks
 
-* **Parent Types** implement `PostConstruct() Error`.
-* **Embedded Types** implement `PostConstruct(parent any) Error`. The container will pass a pointer to the parent struct
-that embedded it, which is incredibly powerful for building generic base modules.
+* **Parent Types** implement `PostConstruct() Error` (and optionally `WithContext(ctx context.Context) Error` for `Prototype` Beams).
+* **Embedded Types** implement `PostConstruct(parent any) Error`.
+
 
 Here is a complete example showing `New()`, embedded hooks, interface enforcement, and composition working together:
 
