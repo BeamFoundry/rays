@@ -164,6 +164,15 @@ type trackerKeyType string
 
 var trackerKey trackerKeyType = "tracker"
 
+type BeamPrototypeConfigurationError struct {
+	Configuration
+	Prototype
+}
+
+func (this *BeamPrototypeConfigurationError) Value() *BeamWithValue {
+	return (&BeamWithValue{}).WithValue("invalid")
+}
+
 type BeamRefusedBeam struct {
 	Configuration
 	ConditionalOnMissingBeam
@@ -353,6 +362,11 @@ var _ = Describe("Errors", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Name()).To(Equal("PostConstructError"))
 		Expect(trackerPost.calls).To(Equal([]string{"WithContext", "InnerPostConstruct", "PostConstruct"}))
+	})
+	It("rejects Prototype Configuration parent at registration", func() {
+		_, err := GetContainer().AddBeamFor(&BeamPrototypeConfigurationError{})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Name()).To(Equal("InvalidScope"))
 	})
 	It("can log error if set profile after initialize", func() {
 		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())

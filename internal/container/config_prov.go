@@ -27,7 +27,6 @@ func (this *ConfigurationBeamProvider) ProvideBeam(reflectType reflect.Type, con
 		err.LogError()
 		return nil, beams
 	}
-	// TODO: Force it to be a singleton ???
 	parent = builder.Build()
 
 	services.Get().Logger.Debug("Evaluating registration beam with Configuration Stereotype", "beam", parent.Attributes()[QualifierAttribute], "methods", parent.Type().NumMethod())

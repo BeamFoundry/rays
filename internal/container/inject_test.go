@@ -278,6 +278,27 @@ type BeamWithDirectPrototypeLifecycle struct {
 	proto *BeamPrototypeFullLifecycle `@:"Inject"`
 }
 
+type PrototypeLifecycleInterface interface {
+	Calls() []string
+	ParentOK() bool
+}
+
+func (this *BeamPrototypeFullLifecycle) Calls() []string {
+	return this.calls
+}
+
+func (this *BeamPrototypeFullLifecycle) ParentOK() bool {
+	return this.parentOK
+}
+
+type BeamPrototypeInterfaceConfigLifecycle struct {
+	Configuration
+}
+
+func (this *BeamPrototypeInterfaceConfigLifecycle) ProvideInterfaceProto(_ context.Context) PrototypeLifecycleInterface {
+	return &BeamPrototypeFullLifecycle{}
+}
+
 type BeamPrototypeConfigLifecycle struct {
 	Configuration
 }
@@ -351,6 +372,26 @@ var _ = Describe("Prototype Lifecycle Order", func() {
 		Expect(forged.calls).To(Equal([]string{
 			"WithContext",
 			"InnerPostConstruct:cfg:dep",
+			"PostConstruct",
+		}))
+	})
+
+	It("calls WithContext, then InnerBeamPostConstruct, then PostConstruct for interface-backed Configuration prototype beam", func() {
+		AddBeamFor((&BeamWithValue{}).WithValue("dep"))
+		AddBeamFor(&BeamPrototypeInterfaceConfigLifecycle{})
+		AddBeamFor(&BeamWithFoundry[PrototypeLifecycleInterface]{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		instance := GetBeamDefaultInstance[*BeamWithFoundry[PrototypeLifecycleInterface]]()
+
+		forged, err := instance.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "iface"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(forged.ParentOK()).To(BeTrue())
+		Expect(forged.Calls()).To(Equal([]string{
+			"WithContext",
+			"InnerPostConstruct:iface:dep",
 			"PostConstruct",
 		}))
 	})

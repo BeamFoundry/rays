@@ -26,7 +26,9 @@ type SessionState struct {
 
 // Optional: Receive context when forged (BeamPrototypeWithContext)
 func (s *SessionState) WithContext(ctx context.Context) Error {
-    s.userID = ctx.Value("userID").(string)
+    if userID, ok := ctx.Value("userID").(string); ok {
+        s.userID = userID
+    }
     return nil
 }
 
@@ -46,7 +48,11 @@ type AuthMiddleware struct {
 
 func (m *AuthMiddleware) HandleHTTP(req *http.Request) {
     // 1. Forge a brand new instance
-    session, _ := m.sessionFactory.Forge(req.Context())
+    session, err := m.sessionFactory.Forge(req.Context())
+    if err != nil {
+        m.logger.Error("Failed to forge session", "error", err)
+        return
+    }
 
     // 2. Use the isolated prototype
     m.logger.Info("Handle HTTP connection", "userID", session.userID)
