@@ -35,7 +35,6 @@ func (this *Registry) AddBeamFor(ptr any) (Beam, Error) {
 		reflectType = reflect.TypeOf(ptr)
 	}
 
-	// TODO Verify beams are Singleton for parent if children are there
 	if field := FindFieldForInterface[Stereotype](reflectType); field != nil {
 		bpi := reflect.TypeFor[BeamProvider]()
 		if bp, ok := this.providers[field.Type]; ok {
@@ -489,6 +488,10 @@ func (this *Registry) registerProvider(reflectType reflect.Type, provider BeamPr
 
 	if parent == nil {
 		return nil, NewError("InvalidType", "Bean must be a pointer to a struct")
+	}
+
+	if parent.Scope() != (BeamScope{}.New().SINGLETON) {
+		return nil, NewError("InvalidScope", "Provider parent beam must be a Singleton", "type", parent.Type())
 	}
 
 	if err := this.validateBeam(parent); err != nil {

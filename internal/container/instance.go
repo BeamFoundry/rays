@@ -199,30 +199,29 @@ func (this *Instance) injectField(field *reflect.StructField, valueOf reflect.Va
 	return nil
 }
 
-func (this *Instance) prepareInitialize() (bool, Error) {
+func (this *Instance) checkReadyForInitialize() Error {
 	if this.status.Compare(InstanceStatus{}.New().INITIALIZED) >= 0 {
-		return false, NewError("InstanceError", "Instance already initialized")
+		return NewError("InstanceError", "Instance already initialized")
 	} else if this.status.Compare(InstanceStatus{}.New().INJECTED) < 0 {
-		return false, NewError("InstanceError", "Instance not injected")
+		return NewError("InstanceError", "Instance not injected")
 	}
-
-	if this.beam.Type().Kind() == reflect.Interface && GetContainer().IsChildBeam(this.beam) {
-		this.status = InstanceStatus{}.New().INITIALIZED
-		this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
-		return true, nil
-	}
-	return false, nil
+	return nil
 }
 
 func (this *Instance) initializePostConstruct() Error {
-	for i := range this.beam.Type().Elem().NumField() {
-		field := this.beam.Type().Elem().Field(i)
-		if field.Anonymous && field.Type.Kind() == reflect.Struct {
-			if inner, ok := reflect.ValueOf(this.instance).Elem().Field(i).Addr().Interface().(InnerBeamPostConstruct); ok {
-				if err := inner.PostConstruct(this.instance); err != nil {
-					return err
+	instanceVal := reflect.ValueOf(this.instance)
+	if instanceVal.IsValid() && instanceVal.Kind() == reflect.Pointer && !instanceVal.IsNil() && instanceVal.Elem().Kind() == reflect.Struct {
+		concreteType := instanceVal.Type().Elem()
+		concreteVal := instanceVal.Elem()
+		for i := range concreteType.NumField() {
+			field := concreteType.Field(i)
+			if field.Anonymous && field.Type.Kind() == reflect.Struct {
+				if inner, ok := concreteVal.Field(i).Addr().Interface().(InnerBeamPostConstruct); ok {
+					if err := inner.PostConstruct(this.instance); err != nil {
+						return err
+					}
+					this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 				}
-				this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 			}
 		}
 	}
@@ -239,8 +238,13 @@ func (this *Instance) initializePostConstruct() Error {
 }
 
 func (this *Instance) Initialize() Error {
-	if done, err := this.prepareInitialize(); err != nil || done {
+	if err := this.checkReadyForInitialize(); err != nil {
 		return err
+	}
+	if this.beam.Type().Kind() == reflect.Interface && GetContainer().IsChildBeam(this.beam) {
+		this.status = InstanceStatus{}.New().INITIALIZED
+		this.logger.Trace("Type is interface, returning.", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type())
+		return nil
 	}
 	// Prototype default instances have no request context; scoped instances run hooks via InitializeWithContext.
 	if this.beam.Scope() == (BeamScope{}.New().PROTOTYPE) {
@@ -256,7 +260,7 @@ func (this *Instance) Initialize() Error {
 //
 //nolint:contextcheck // False positive
 func (this *Instance) InitializeWithContext(ctx context.Context) Error {
-	if done, err := this.prepareInitialize(); err != nil || done {
+	if err := this.checkReadyForInitialize(); err != nil {
 		return err
 	}
 	if this.beam.Scope() == (BeamScope{}.New().PROTOTYPE) {
