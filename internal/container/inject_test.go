@@ -395,7 +395,98 @@ var _ = Describe("Prototype Lifecycle Order", func() {
 			"PostConstruct",
 		}))
 	})
+
+	It("skips unexported embedded structs safely on interface-backed Configuration prototype beam", func() {
+		AddBeamFor((&BeamWithValue{}).WithValue("dep"))
+		AddBeamFor(&beamPrototypeUnexportedInnerConfig{})
+		AddBeamFor(&BeamWithFoundry[PrototypeLifecycleInterface]{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		instance := GetBeamDefaultInstance[*BeamWithFoundry[PrototypeLifecycleInterface]]()
+
+		forged, err := instance.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "unexported"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(forged.ParentOK()).To(BeTrue())
+		Expect(forged.Calls()).To(Equal([]string{
+			"WithContext",
+			"ExportedInnerPostConstruct:unexported:dep",
+			"PostConstruct",
+		}))
+		concrete, ok := forged.(*beamInterfaceWithUnexportedInner)
+		Expect(ok).To(BeTrue())
+		Expect(concrete.called).To(BeFalse())
+		Expect(concrete.note).To(Equal("unexported"))
+	})
 })
+
+type unexportedInnerNoHook struct {
+	note string
+}
+
+type unexportedInnerWithHook struct {
+	called bool
+}
+
+func (this *unexportedInnerWithHook) PostConstruct(parent any) Error {
+	this.called = true
+	if p, ok := parent.(*beamInterfaceWithUnexportedInner); ok {
+		p.calls = append(p.calls, "UnexportedInnerPostConstruct")
+	}
+	return nil
+}
+
+type ExportedInnerForUnexportedTest struct {
+	injected *BeamWithValue `@:"Inject"`
+	parentOK bool
+}
+
+func (this *ExportedInnerForUnexportedTest) PostConstruct(parent any) Error {
+	if p, ok := parent.(*beamInterfaceWithUnexportedInner); ok {
+		if this.injected != nil && len(p.calls) == 1 && p.calls[0] == "WithContext" {
+			this.parentOK = true
+		}
+		p.calls = append(p.calls, "ExportedInnerPostConstruct:"+p.note+":"+this.injected.GetValue())
+	}
+	return nil
+}
+
+type beamInterfaceWithUnexportedInner struct {
+	ExportedInnerForUnexportedTest
+	unexportedInnerNoHook
+	calls []string
+	unexportedInnerWithHook
+}
+
+func (this *beamInterfaceWithUnexportedInner) WithContext(ctx context.Context) Error {
+	if value, ok := ctx.Value(keyValue).(string); ok {
+		this.note = value
+	}
+	this.calls = append(this.calls, "WithContext")
+	return nil
+}
+
+func (this *beamInterfaceWithUnexportedInner) PostConstruct() Error {
+	this.calls = append(this.calls, "PostConstruct")
+	return nil
+}
+
+func (this *beamInterfaceWithUnexportedInner) Calls() []string {
+	return this.calls
+}
+
+func (this *beamInterfaceWithUnexportedInner) ParentOK() bool {
+	return this.parentOK
+}
+
+type beamPrototypeUnexportedInnerConfig struct {
+	Configuration
+}
+
+func (this *beamPrototypeUnexportedInnerConfig) ProvideInterfaceProto(_ context.Context) PrototypeLifecycleInterface {
+	return &beamInterfaceWithUnexportedInner{}
+}
 
 type BeamWithQualifier struct {
 	Component

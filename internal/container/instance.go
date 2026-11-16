@@ -216,11 +216,14 @@ func (this *Instance) initializePostConstruct() Error {
 		for i := range concreteType.NumField() {
 			field := concreteType.Field(i)
 			if field.Anonymous && field.Type.Kind() == reflect.Struct {
-				if inner, ok := concreteVal.Field(i).Addr().Interface().(InnerBeamPostConstruct); ok {
-					if err := inner.PostConstruct(this.instance); err != nil {
-						return err
+				fieldAddr := concreteVal.Field(i).Addr()
+				if fieldAddr.CanInterface() {
+					if inner, ok := fieldAddr.Interface().(InnerBeamPostConstruct); ok {
+						if err := inner.PostConstruct(this.instance); err != nil {
+							return err
+						}
+						this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 					}
-					this.logger.Trace("Inner field initialized", "qualifier", this.beam.Attributes()[QualifierAttribute], "type", this.beam.Type(), "field", field.Name)
 				}
 			}
 		}
