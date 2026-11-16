@@ -47,7 +47,7 @@ type Beam interface {
 	//
 	// NOTE: Default Foundry created by [BeamBuilder] do not care about those.
 	// Only [Configuration] method [Beam] will receive them, if it has a [context.Context] argument.
-	// Typical stereotyped Beam should use [BeamPostConstructWithContext.WithContext].
+	// Typical stereotyped Beam should use [BeamPrototypeWithContext.WithContext].
 	Foundry() func(context.Context) (any, Error)
 }
 
@@ -97,23 +97,25 @@ type BeamConditionEvaluator interface {
 	EvaluateBeamCondition(beam Beam, container InitializingContext) bool
 }
 
-// BeamPostConstruct represent an interface with a PostConstruct function for a Singleton [Beam].
+// BeamPostConstruct represents an interface with a PostConstruct function for a [Beam].
 type BeamPostConstruct interface {
-	// PostConstruct() is the function a Stereotyped Singleton struct must implement and the
-	// container will call it once the Beam has been injected successfully.
+	// PostConstruct() is the function a Stereotyped struct can implement and the
+	// container will call it once the Beam has been injected and any [BeamPrototypeWithContext]
+	// (for Prototype Beams) and [InnerBeamPostConstruct] hooks have run.
 	//
-	// If an Error is returned, the container initialization will fail.
+	// If an Error is returned, the initialization will fail.
 	PostConstruct() Error
 }
 
-// BeamPostConstructWithContext represent an interface with a PostConstruct function for a Prototype [Beam].
+// BeamPrototypeWithContext represents an interface with a WithContext function for a Prototype [Beam].
 //
-// This function will be called after [BeamPostConstruct.PostConstruct].
-type BeamPostConstructWithContext interface {
-	// WithContext() is the function a Stereotyped Prototype struct must implement and the
+// When defined on a Prototype [Beam], this function will be called first after injection,
+// before any [InnerBeamPostConstruct.PostConstruct] and [BeamPostConstruct.PostConstruct].
+type BeamPrototypeWithContext interface {
+	// WithContext() is the function a Stereotyped Prototype struct can implement and the
 	// container will call it once the [Beam] has been injected successfully.
 	//
-	// If an Error is returned, the container initialization will fail.
+	// If an Error is returned, the initialization will fail.
 	//
 	// The [context.Context] will contain at least the following key/values :
 	//
@@ -125,11 +127,12 @@ type BeamPostConstructWithContext interface {
 	WithContext(context.Context) Error
 }
 
-// InnerBeamPostConstruct represent an interface with a PostConstruct function for a Composite struct.
+// InnerBeamPostConstruct represents an interface with a PostConstruct function for a Composite struct.
 type InnerBeamPostConstruct interface {
 	// Stereotyped (parent) struct can also contain embedded (composite) struct with their own injected types.
 	//
-	// Those inner structs will be initialized first with a pointer to their parent struct using this function.
+	// Those inner structs will be initialized with a pointer to their parent struct using this function,
+	// after [BeamPrototypeWithContext.WithContext] (for Prototype Beams) and before [BeamPostConstruct.PostConstruct].
 	PostConstruct(parent any) Error
 }
 
