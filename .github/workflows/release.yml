@@ -2,25 +2,22 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*' # Triggers workflow only when a tag starting with 'v' is pushed
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
-  create-release:
-    name: Create GitHub Release
+  release-please:
+    name: Release Please
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required to create a release
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Create Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Uses the official GitHub CLI to create the release and auto-generate changelog notes
-        run: |
-          gh release create ${{ github.ref_name }} \
-            --title "Release ${{ github.ref_name }}" \
-            --generate-notes
+      - name: Run Release Please
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
