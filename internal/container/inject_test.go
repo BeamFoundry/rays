@@ -224,7 +224,46 @@ var _ = Describe("Foundry", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(beam.GetValue()).To(Equal("value"))
 	})
+	It("propagates context and sets PrototypeContextProxyType/Instance across nested Prototype injections", func() {
+		AddBeamFor(&NestedPrototypeChild{})
+		AddBeamFor(&NestedPrototypeParent{})
+		AddBeamFor(&BeamWithFoundry[*NestedPrototypeParent]{})
+
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		holder := GetBeamDefaultInstance[*BeamWithFoundry[*NestedPrototypeParent]]()
+		forged, err := holder.GetFoundry().Forge(context.WithValue(context.Background(), keyValue, "nested-ctx"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(forged.child).NotTo(BeNil())
+		Expect(forged.child.GetValue()).To(Equal("nested-ctx"))
+		Expect(forged.child.proxyType).To(Equal(reflect.TypeFor[*BeamWithFoundry[*NestedPrototypeParent]]()))
+		Expect(forged.child.proxyInstance).To(BeIdenticalTo(holder))
+	})
 })
+
+type NestedPrototypeChild struct {
+	Component
+	Prototype
+	proxyType     reflect.Type
+	proxyInstance any
+	BeamWithValue
+}
+
+func (this *NestedPrototypeChild) WithContext(ctx context.Context) Error {
+	if value, ok := ctx.Value(keyValue).(string); ok {
+		this.SetValue(value)
+	}
+	this.proxyType, _ = ctx.Value(PrototypeContextProxyType).(reflect.Type)
+	this.proxyInstance = ctx.Value(PrototypeContextProxyInstance)
+	return nil
+}
+
+type NestedPrototypeParent struct {
+	Component
+	Prototype
+	child *NestedPrototypeChild `@:"Inject"`
+}
 
 type PrototypeLifecycleInner struct {
 	injected *BeamWithValue `@:"Inject"`

@@ -320,13 +320,16 @@ func (this *Registry) GetBeamScopedInstance(ctx context.Context, beam Beam, pare
 	if beam.Scope() == (BeamScope{}.New().SINGLETON) {
 		return this.getBeamDefaultInstance(beam), nil
 	}
+	if prevType := ctx.Value(PrototypeContextParentType); prevType != nil && ctx.Value(PrototypeContextProxyType) == nil {
+		ctx = context.WithValue(ctx, PrototypeContextProxyType, prevType)
+		ctx = context.WithValue(ctx, PrototypeContextProxyInstance, ctx.Value(PrototypeContextParentInstance))
+	}
 	ctx = context.WithValue(ctx, PrototypeContextParentType, parent.beam.Type())
 	ctx = context.WithValue(ctx, PrototypeContextParentInstance, parent.instance)
 	beamInstance := NewInstance(beam)
-	//nolint:contextcheck // False
 	err := Try(func() {
 		RaiseErr(beamInstance.Create(ctx))
-		RaiseErr(beamInstance.Inject())
+		RaiseErr(beamInstance.InjectWithContext(ctx))
 		RaiseErr(beamInstance.InitializeWithContext(ctx))
 	})
 	if err != nil {

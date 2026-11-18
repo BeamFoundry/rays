@@ -293,12 +293,83 @@ type ContainerConfiguration interface {
 	Run()
 }
 
+// TransactionProvider represents a non-generic transaction provider managed by [TransactionManager].
+type TransactionProvider interface {
+	// Start begins a transaction on the underlying resource for the current goroutine.
+	Start() Error
+
+	// Commit commits the active transaction on the underlying resource for the current goroutine.
+	Commit() Error
+
+	// Rollback rolls back the active transaction on the underlying resource for the current goroutine.
+	Rollback() Error
+
+	// End cleans up and releases any goroutine-local transaction state on the underlying resource.
+	End()
+
+	// SetError reports an error from a repository or resource to the provider and [TransactionManager],
+	// triggering an immediate rollback across all participating providers on the current goroutine.
+	SetError(err Error)
+
+	// Error returns any error recorded on the current goroutine's transaction.
+	Error() Error
+}
+
 // Transactional represent a transaction provider for a <T> type.
 type Transactional[T any] interface {
-	Start(context.Context) *T
-	Transactional(ctx context.Context, action func(*T) Error)
+	TransactionProvider
+
+	// Get returns the active transactional resource <*T> for the current goroutine,
+	// lazily enlisting in the current [TransactionManager] transaction if one is active.
 	Get() *T
+}
+
+// TransactionManager coordinates goroutine-local [context.Context] and transaction state
+// across multiple [TransactionProvider] ([Transactional]) implementations.
+type TransactionManager interface {
+	Manager
+
+	// SetContext binds ctx to the current goroutine (defaults to [context.Background] if nil).
+	SetContext(ctx context.Context)
+
+	// GetContext returns the [context.Context] bound to the current goroutine,
+	// or [context.Background] if none is set.
+	GetContext() context.Context
+
+	// ClearContext resets the [context.Context] for the current goroutine back to default.
+	ClearContext()
+
+	// Enlist registers a [TransactionProvider] in the current goroutine's active transaction
+	// and starts its underlying transaction if not already enlisted.
+	Enlist(provider TransactionProvider) Error
+
+	// Start begins a new coordinated transaction on the current goroutine.
+	Start() Error
+
+	// IsActive returns true if a transaction is currently active on the current goroutine.
+	IsActive() bool
+
+	// Commit commits all enlisted [TransactionProvider] instances on the current goroutine.
+	Commit() Error
+
+	// Rollback rolls back all enlisted [TransactionProvider] instances on the current goroutine.
+	Rollback() Error
+
+	// End finalizes and cleans up the active transaction and all enlisted [TransactionProvider]
+	// instances on the current goroutine.
 	End()
+
+	// Transactional executes action inside a coordinated transaction on the current goroutine,
+	// committing on success or rolling back if action returns an [Error], panics, or any
+	// participating provider reports an error via [TransactionManager.SetError].
+	Transactional(action func() Error) Error
+
+	// SetError records an [Error] on the current goroutine's active transaction and immediately
+	// triggers [TransactionProvider.Rollback] on all enlisted providers.
+	SetError(err Error)
+
+	// Error returns the [Error] recorded on the current goroutine's active transaction, or nil.
+	Error() Error
 }
 
 // Manager is a marker interface to differentiate a provider of a component type and
