@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0-rc2](https://github.com/BeamFoundry/rays/compare/v0.5.0-rc1...v0.5.0-rc2) (2026-11-20)
+
+
+### Bug Fixes
+
+* **container:** restore non-blocking error handling for slice, map, a… ([#29](https://github.com/BeamFoundry/rays/issues/29)) ([291b929](https://github.com/BeamFoundry/rays/commit/291b929b17232a45bbd7893f4b1369250622ae50))
+* **container:** restore non-blocking error handling for slice, map, and optional injections ([291b929](https://github.com/BeamFoundry/rays/commit/291b929b17232a45bbd7893f4b1369250622ae50))
+
+
+### Miscellaneous Chores
+
+* **release:** prepare version v0.5.0-rc2 ([dc42dd4](https://github.com/BeamFoundry/rays/commit/dc42dd4b9afa508ecfeee591f7964f8d246ec43e))
+
 ## [0.5.0-rc1](https://github.com/BeamFoundry/rays/compare/v0.4.2...v0.5.0-rc1) (2026-11-20)
 
 
