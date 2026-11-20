@@ -156,6 +156,9 @@ func (this *DefaultTransactionManager) Commit() Error {
 	for i, provider := range state.providers {
 		err := provider.Commit()
 		if err == nil {
+			if state.err != nil {
+				return state.err
+			}
 			continue
 		}
 		state.err = err

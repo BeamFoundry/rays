@@ -35,14 +35,15 @@ type mockResource struct {
 }
 
 type mockTransactional struct {
-	txManager   TransactionManager
-	startErr    Error
-	commitErr   Error
-	rollbackErr Error
-	local       routine.ThreadLocal[*mockResource]
-	lastSession routine.ThreadLocal[*mockResource]
-	name        string
-	reentrantRb bool
+	txManager    TransactionManager
+	startErr     Error
+	commitErr    Error
+	commitSetErr Error
+	rollbackErr  Error
+	local        routine.ThreadLocal[*mockResource]
+	lastSession  routine.ThreadLocal[*mockResource]
+	name         string
+	reentrantRb  bool
 }
 
 var _ Transactional[mockResource] = &mockTransactional{}
@@ -71,6 +72,10 @@ func (this *mockTransactional) Start() Error {
 }
 
 func (this *mockTransactional) Commit() Error {
+	if this.commitSetErr != nil && this.txManager != nil {
+		this.txManager.SetError(this.commitSetErr)
+		return nil
+	}
 	if this.commitErr != nil {
 		return this.commitErr
 	}
@@ -307,6 +312,20 @@ var _ = Describe("DefaultTransactionManager", func() {
 			Expect(mongoTx.lastSession.Get().committed).To(BeFalse())
 			Expect(mongoTx.lastSession.Get().rolledBack).To(BeTrue())
 			Expect(mongoTx.lastSession.Get().ended).To(BeTrue())
+
+			// Provider calls SetError during Commit() and returns nil
+			sqlTx.commitErr = nil
+			sqlTx.commitSetErr = NewError("SqlCommitSetError", "reported via SetError during Commit")
+			err = txMgr.Transactional(func() Error {
+				_ = sqlTx.Get()
+				_ = mongoTx.Get()
+				return nil
+			})
+			Expect(err).To(Equal(sqlTx.commitSetErr))
+			Expect(sqlTx.lastSession.Get().committed).To(BeFalse())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().committed).To(BeFalse())
+			Expect(mongoTx.lastSession.Get().rolledBack).To(BeTrue())
 		})
 
 		It("automatically rolls back uncommitted transactions when End() is called directly", func() {
