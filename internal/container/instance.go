@@ -104,8 +104,12 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 		return nil
 	}
 	beams, err := GetContainer().FindBeamsForStructField(field)
-	if err != nil && err.Name() == "InvalidParameter" {
-		return nil
+	if err != nil {
+		if err.Name() == "InvalidParameter" {
+			return nil
+		}
+		err.LogError()
+		return err
 	}
 
 	this.logger.Trace("Evaluating field", "field.Name", field.Name, "qualifier", this.beam.Attributes()[QualifierAttribute])
@@ -122,7 +126,7 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 		// Can be trigged by a panic in a construct function.
 		// Returning an error with Prototype constructor should do it also....
 		if err != nil {
-			err.LogErrorWithStackTrace()
+			err.LogError()
 			return err
 		}
 		value := UnprotectValue(valueOf)
@@ -133,8 +137,8 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 		for _, beam := range beams {
 			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
 			if err != nil {
-				err.LogErrorWithStackTrace()
-				return err
+				err.LogError()
+				continue
 			}
 			instances = append(instances, reflect.ValueOf(instance.Get()))
 		}
@@ -164,8 +168,8 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 			}
 			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
 			if err != nil {
-				err.LogErrorWithStackTrace()
-				return err
+				err.LogError()
+				continue
 			}
 			if _, ok := instanceMap[attribute]; !ok {
 				instanceMap[attribute] = []reflect.Value{reflect.ValueOf(instance.Get())}
@@ -191,13 +195,13 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 			beam := beams[0]
 			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
 			if err != nil {
-				err.LogErrorWithStackTrace()
-				return err
+				err.LogError()
+			} else {
+				value := UnprotectValue(valueOf.FieldByName("value"))
+				value.Set(reflect.ValueOf(instance.Get()))
+				present := UnprotectValue(valueOf.FieldByName("present"))
+				present.Set(reflect.ValueOf(true))
 			}
-			value := UnprotectValue(valueOf.FieldByName("value"))
-			value.Set(reflect.ValueOf(instance.Get()))
-			present := UnprotectValue(valueOf.FieldByName("present"))
-			present.Set(reflect.ValueOf(true))
 		} else if Strings(field.Type.String()).HasPrefix("core.Foundry[") && len(beams) == 1 {
 			beam := beams[0]
 			furnace := UnprotectValue(valueOf.FieldByName("furnace"))

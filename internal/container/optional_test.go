@@ -34,4 +34,12 @@ var _ = Describe("Optional", func() {
 		Expect(ok).To(BeTrue())
 		Expect(opt.GetValue()).To(Equal("test"))
 	})
+	It("injects OptionalEmpty when no candidate is found", func() {
+		AddBeamFor(&BeanWithOptional{})
+		err := GetContainer().Initialize()
+		Expect(err).NotTo(HaveOccurred())
+
+		instance := GetBeamDefaultInstance[*BeanWithOptional]()
+		Expect(instance.bean.IsPresent()).To(BeFalse())
+	})
 })
