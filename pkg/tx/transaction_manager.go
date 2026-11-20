@@ -160,7 +160,7 @@ func (this *DefaultTransactionManager) Commit() Error {
 		}
 		state.err = err
 		state.rollingBack = true
-		for j := len(state.providers) - 1; j > i; j-- {
+		for j := len(state.providers) - 1; j >= i; j-- {
 			if rbErr := state.providers[j].Rollback(); rbErr != nil && this.logger != nil {
 				this.logger.Error("Rollback failed after commit error", "error", rbErr.Error())
 			}

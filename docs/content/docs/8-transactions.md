@@ -285,7 +285,9 @@ func (this *MyTransactionalManager) Get() *MySession {
     }
     if this.txManager != nil && this.txManager.IsActive() {
         if err := this.txManager.Enlist(this); err != nil {
-            return this.client.SessionWithContext(this.txManager.GetContext())
+            sess := this.client.SessionWithContext(this.txManager.GetContext())
+            sess.SetError(err)
+            return sess
         }
         return this.threadLocal.Get()
     }

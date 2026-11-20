@@ -40,7 +40,7 @@ type mockTransactional struct {
 	commitErr   Error
 	rollbackErr Error
 	local       routine.ThreadLocal[*mockResource]
-	lastSession *mockResource
+	lastSession routine.ThreadLocal[*mockResource]
 	name        string
 	reentrantRb bool
 }
@@ -49,9 +49,10 @@ var _ Transactional[mockResource] = &mockTransactional{}
 
 func newMockTransactional(name string, txManager TransactionManager) *mockTransactional {
 	return &mockTransactional{
-		name:      name,
-		txManager: txManager,
-		local:     routine.NewThreadLocal[*mockResource](),
+		name:        name,
+		txManager:   txManager,
+		local:       routine.NewThreadLocal[*mockResource](),
+		lastSession: routine.NewThreadLocal[*mockResource](),
 	}
 }
 
@@ -65,7 +66,7 @@ func (this *mockTransactional) Start() Error {
 		started: true,
 	}
 	this.local.Set(res)
-	this.lastSession = res
+	this.lastSession.Set(res)
 	return nil
 }
 
@@ -204,12 +205,12 @@ var _ = Describe("DefaultTransactionManager", func() {
 				return nil
 			})
 			Expect(err).To(Succeed())
-			Expect(sqlTx.lastSession.committed).To(BeTrue())
-			Expect(sqlTx.lastSession.rolledBack).To(BeFalse())
-			Expect(sqlTx.lastSession.ended).To(BeTrue())
-			Expect(mongoTx.lastSession.committed).To(BeTrue())
-			Expect(mongoTx.lastSession.rolledBack).To(BeFalse())
-			Expect(mongoTx.lastSession.ended).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().committed).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeFalse())
+			Expect(sqlTx.lastSession.Get().ended).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().committed).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().rolledBack).To(BeFalse())
+			Expect(mongoTx.lastSession.Get().ended).To(BeTrue())
 			Expect(txMgr.IsActive()).To(BeFalse())
 		})
 
@@ -236,12 +237,12 @@ var _ = Describe("DefaultTransactionManager", func() {
 			})
 
 			Expect(err).To(Equal(repoErr))
-			Expect(sqlTx.lastSession.committed).To(BeFalse())
-			Expect(sqlTx.lastSession.rolledBack).To(BeTrue())
-			Expect(sqlTx.lastSession.ended).To(BeTrue())
-			Expect(mongoTx.lastSession.committed).To(BeFalse())
-			Expect(mongoTx.lastSession.rolledBack).To(BeTrue())
-			Expect(mongoTx.lastSession.ended).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().committed).To(BeFalse())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().ended).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().committed).To(BeFalse())
+			Expect(mongoTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().ended).To(BeTrue())
 		})
 
 		It("rolls back all participating providers when Transactional closure returns an Error or panics", func() {
@@ -252,8 +253,8 @@ var _ = Describe("DefaultTransactionManager", func() {
 				return actionErr
 			})
 			Expect(err).To(Equal(actionErr))
-			Expect(sqlTx.lastSession.rolledBack).To(BeTrue())
-			Expect(mongoTx.lastSession.rolledBack).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().rolledBack).To(BeTrue())
 
 			// Panic inside closure
 			panicErr := txMgr.Transactional(func() Error {
@@ -263,7 +264,7 @@ var _ = Describe("DefaultTransactionManager", func() {
 			})
 			Expect(panicErr).To(HaveOccurred())
 			Expect(panicErr.Name()).To(Equal("PanicError"))
-			Expect(sqlTx.lastSession.rolledBack).To(BeTrue())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeTrue())
 		})
 
 		It("rolls back already-enlisted providers if a subsequent provider fails to Start during Enlist", func() {
@@ -288,19 +289,24 @@ var _ = Describe("DefaultTransactionManager", func() {
 			Expect(s.ended).To(BeTrue())
 		})
 
-		It("rolls back remaining uncommitted providers if a provider fails during Commit", func() {
+		It("rolls back the failing provider and remaining uncommitted providers if a provider fails during Commit", func() {
+			firstTx := newMockTransactional("first", txMgr)
 			sqlTx.commitErr = NewError("SqlCommitError", "deadlock on commit")
 
 			err := txMgr.Transactional(func() Error {
+				_ = firstTx.Get()
 				_ = sqlTx.Get()
 				_ = mongoTx.Get()
 				return nil
 			})
 			Expect(err).To(Equal(sqlTx.commitErr))
-			Expect(sqlTx.lastSession.committed).To(BeFalse())
-			Expect(mongoTx.lastSession.committed).To(BeFalse())
-			Expect(mongoTx.lastSession.rolledBack).To(BeTrue())
-			Expect(mongoTx.lastSession.ended).To(BeTrue())
+			Expect(firstTx.lastSession.Get().committed).To(BeTrue())
+			Expect(firstTx.lastSession.Get().rolledBack).To(BeFalse())
+			Expect(sqlTx.lastSession.Get().committed).To(BeFalse())
+			Expect(sqlTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().committed).To(BeFalse())
+			Expect(mongoTx.lastSession.Get().rolledBack).To(BeTrue())
+			Expect(mongoTx.lastSession.Get().ended).To(BeTrue())
 		})
 
 		It("automatically rolls back uncommitted transactions when End() is called directly", func() {

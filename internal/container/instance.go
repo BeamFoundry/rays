@@ -91,13 +91,15 @@ func (this *Instance) injectBeams(ctx context.Context) Error {
 	return nil
 }
 
-//nolint:contextcheck,errcheck,revive // It should not occurs
+//nolint:contextcheck,revive // It should not occurs
 func (this *Instance) injectField(ctx context.Context, field *reflect.StructField, valueOf reflect.Value, recurse bool) Error {
 	if recurse && field.Anonymous && field.Type.Kind() == reflect.Struct /* && field.Tag == "" */ {
 		for i := range field.Type.NumField() {
 			f := field.Type.Field(i)
 			v := valueOf.Field(i)
-			this.injectField(ctx, &f, v, false)
+			if err := this.injectField(ctx, &f, v, false); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -129,9 +131,12 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 	case reflect.Slice:
 		instances := []reflect.Value{}
 		for _, beam := range beams {
-			if instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this); err == nil {
-				instances = append(instances, reflect.ValueOf(instance.Get()))
+			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
+			if err != nil {
+				err.LogErrorWithStackTrace()
+				return err
 			}
+			instances = append(instances, reflect.ValueOf(instance.Get()))
 		}
 		value := UnprotectValue(valueOf)
 		value.Set(reflect.MakeSlice(field.Type, len(instances), len(instances)))
@@ -157,12 +162,15 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 				}
 				attribute = def
 			}
-			if instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this); err == nil {
-				if _, ok := instanceMap[attribute]; !ok {
-					instanceMap[attribute] = []reflect.Value{reflect.ValueOf(instance.Get())}
-				} else {
-					instanceMap[attribute] = append(instanceMap[attribute], reflect.ValueOf(instance.Get()))
-				}
+			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
+			if err != nil {
+				err.LogErrorWithStackTrace()
+				return err
+			}
+			if _, ok := instanceMap[attribute]; !ok {
+				instanceMap[attribute] = []reflect.Value{reflect.ValueOf(instance.Get())}
+			} else {
+				instanceMap[attribute] = append(instanceMap[attribute], reflect.ValueOf(instance.Get()))
 			}
 		}
 		for key, instances := range instanceMap {
@@ -181,12 +189,15 @@ func (this *Instance) injectField(ctx context.Context, field *reflect.StructFiel
 	case reflect.Struct:
 		if Strings(field.Type.String()).HasPrefix("lang.Optional[") && len(beams) == 1 {
 			beam := beams[0]
-			if instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this); err == nil {
-				value := UnprotectValue(valueOf.FieldByName("value"))
-				value.Set(reflect.ValueOf(instance.Get()))
-				present := UnprotectValue(valueOf.FieldByName("present"))
-				present.Set(reflect.ValueOf(true))
+			instance, err := GetContainer().GetBeamScopedInstance(ctx, beam, this)
+			if err != nil {
+				err.LogErrorWithStackTrace()
+				return err
 			}
+			value := UnprotectValue(valueOf.FieldByName("value"))
+			value.Set(reflect.ValueOf(instance.Get()))
+			present := UnprotectValue(valueOf.FieldByName("present"))
+			present.Set(reflect.ValueOf(true))
 		} else if Strings(field.Type.String()).HasPrefix("core.Foundry[") && len(beams) == 1 {
 			beam := beams[0]
 			furnace := UnprotectValue(valueOf.FieldByName("furnace"))
