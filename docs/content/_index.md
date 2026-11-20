@@ -20,3 +20,5 @@ highly testable.
 4. [Logging](/rays/docs/4-logging/)
 5. [Language Helpers](/rays/docs/5-language-helpers/)
 6. [Testing](/rays/docs/6-testing/)
+7. [Internationalization](/rays/docs/7-i18n/)
+8. [Transaction Management](/rays/docs/8-transactions/)

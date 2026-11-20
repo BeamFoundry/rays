@@ -154,6 +154,8 @@ package rays
 import (
 	"github.com/BeamFoundry/rays/internal/container"
 	"github.com/BeamFoundry/rays/pkg/core"
+
+	_ "github.com/BeamFoundry/rays/internal/autoconfig" // autoconfig
 )
 
 // ApplicationContext() returns a [core.ContainerConfiguration], letting you control Rays container initialization.
