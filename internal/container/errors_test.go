@@ -108,19 +108,16 @@ type BeamWithEmbeddedPrototypeWithContextError struct {
 	EmbeddedPrototypeWithContextError
 }
 
-//nolint:unused // Injected via reflection in error test
 type BeamWithSliceOfPrototypeWithContextError struct {
 	Component
 	beams []*BeamPrototypeWithContextError `@:"Inject"`
 }
 
-//nolint:unused // Injected via reflection in error test
 type BeamWithMapOfPrototypeWithContextError struct {
 	Component
 	beams map[string]*BeamPrototypeWithContextError `@:"Inject"`
 }
 
-//nolint:unused // Injected via reflection in error test
 type BeamWithOptionalOfPrototypeWithContextError struct {
 	Component
 	beam Optional[*BeamPrototypeWithContextError] `@:"Inject"`
@@ -308,6 +305,13 @@ var _ = Describe("Errors", func() {
 		Expect(instance.Initialize()).To(HaveOccurred())
 		Expect(instance.InitializeWithContext(context.Background())).To(HaveOccurred())
 	})
+	It("can error on injecting an instance with missing candidate dependencies", func() {
+		beam := NewBeamFor(&BeamMissingBeam{})
+		Expect(GetContainer().Register(beam)).NotTo(HaveOccurred())
+		instance := GetContainer().GetBeamDefaultInstance(beam)
+		Expect(instance.Create(context.Background())).NotTo(HaveOccurred())
+		Expect(instance.Inject()).To(HaveOccurred())
+	})
 	It("can error on creating beam after initialize", func() {
 		AddBeamFor((&BeamWithValue{}).WithValue("test"))
 		err := GetContainer().Initialize()
@@ -366,33 +370,36 @@ var _ = Describe("Errors", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(GetContainer().GetBeamDefaultInstance(ownerBeam).Status()).To(Equal(container.InstanceStatus{}.New().CREATED))
 	})
-	It("fails owner injection before INJECTED when WithContext rejects in embedded, slice, map, or Optional fields", func() {
-		// Embedded struct path
+	It("fails owner injection for single instance, but does not block slice, map, or Optional fields on error", func() {
+		// Embedded struct path (single instance injection fails owner)
 		AddBeamFor(&BeamPrototypeWithContextError{})
 		embeddedOwner := AddBeamFor(&BeamWithEmbeddedPrototypeWithContextError{})
 		Expect(GetContainer().Initialize()).To(HaveOccurred())
 		Expect(GetContainer().GetBeamDefaultInstance(embeddedOwner).Status()).To(Equal(container.InstanceStatus{}.New().CREATED))
 		GetContainer().Reset()
 
-		// Slice path
+		// Slice path (non-blocking, logs Error.LogError, empty slice)
 		AddBeamFor(&BeamPrototypeWithContextError{})
 		sliceOwner := AddBeamFor(&BeamWithSliceOfPrototypeWithContextError{})
-		Expect(GetContainer().Initialize()).To(HaveOccurred())
-		Expect(GetContainer().GetBeamDefaultInstance(sliceOwner).Status()).To(Equal(container.InstanceStatus{}.New().CREATED))
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+		Expect(GetContainer().GetBeamDefaultInstance(sliceOwner).Status()).To(Equal(container.InstanceStatus{}.New().INITIALIZED))
+		Expect(GetBeamDefaultInstance[*BeamWithSliceOfPrototypeWithContextError]().beams).To(BeEmpty())
 		GetContainer().Reset()
 
-		// Map path
+		// Map path (non-blocking, logs Error.LogError, empty map)
 		AddBeamFor(&BeamPrototypeWithContextError{})
 		mapOwner := AddBeamFor(&BeamWithMapOfPrototypeWithContextError{})
-		Expect(GetContainer().Initialize()).To(HaveOccurred())
-		Expect(GetContainer().GetBeamDefaultInstance(mapOwner).Status()).To(Equal(container.InstanceStatus{}.New().CREATED))
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+		Expect(GetContainer().GetBeamDefaultInstance(mapOwner).Status()).To(Equal(container.InstanceStatus{}.New().INITIALIZED))
+		Expect(GetBeamDefaultInstance[*BeamWithMapOfPrototypeWithContextError]().beams).To(BeEmpty())
 		GetContainer().Reset()
 
-		// Optional[T] path
+		// Optional[T] path (non-blocking, logs Error.LogError, OptionalEmpty)
 		AddBeamFor(&BeamPrototypeWithContextError{})
 		optOwner := AddBeamFor(&BeamWithOptionalOfPrototypeWithContextError{})
-		Expect(GetContainer().Initialize()).To(HaveOccurred())
-		Expect(GetContainer().GetBeamDefaultInstance(optOwner).Status()).To(Equal(container.InstanceStatus{}.New().CREATED))
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+		Expect(GetContainer().GetBeamDefaultInstance(optOwner).Status()).To(Equal(container.InstanceStatus{}.New().INITIALIZED))
+		Expect(GetBeamDefaultInstance[*BeamWithOptionalOfPrototypeWithContextError]().beam.IsPresent()).To(BeFalse())
 	})
 	It("stops prototype lifecycle on error at each stage", func() {
 		AddBeamFor(&BeamPrototypeStageError{})
