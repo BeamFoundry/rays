@@ -357,3 +357,19 @@ This configuration provides:
 - **Source**: concise reduced function, file, and line formatted in magenta.
 - **Message**: clean, uncolored text for readability.
 - **Attributes & Groups**: subtle faint text (`{faint}`) so key-value metadata is easily readable without distracting from the main log message.
+
+---
+
+## Extending the Log Handler (`WrapLoggingHandler`)
+
+If you want to decorate or fan out log records (for example, to enrich records with trace IDs from `context.Context` or bridge `slog` to OpenTelemetry) without replacing Rays's configured handler and `rays.logging` settings, register a wrapper via `ContainerConfiguration.WrapLoggingHandler`:
+
+```go
+ctx := rays.ApplicationContext()
+ctx.WrapLoggingHandler(func(next slog.Handler) slog.Handler {
+    return myCustomWrapper(next)
+})
+```
+
+Wrappers are applied in registration order and take effect dynamically on the root logger, `slog.Default()`, and all cloned per-package/per-type loggers — even when registered during container initialization (e.g., from a `Configuration` Beam's `PostConstruct`).
+

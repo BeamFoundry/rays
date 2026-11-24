@@ -145,3 +145,28 @@ func (m *MetricsWorker) Run(wg *sync.WaitGroup) {
     }()
 }
 ```
+
+## Phase 4: Shutdown (`BeamPreDestroy`)
+
+Singleton Beams that hold resources requiring graceful cleanup (such as telemetry exporters, connection pools, or background buffers) can implement the `BeamPreDestroy` interface in `pkg/core`:
+
+* **`BeamPreDestroy`**: `PreDestroy() Error` — invoked on all initialized singleton Beams when `ctx.Shutdown()` is called, and automatically at the end of `ctx.Run()` after all `BeamRunner`s exit.
+
+Prototype Beams and uninitialized singletons are skipped. If multiple Beams return an error from `PreDestroy()`, all remaining Beams still run their cleanup, each error is logged, and the first error is returned by `Shutdown()`.
+
+```go
+import (
+    . "github.com/BeamFoundry/rays/pkg/core"
+    . "github.com/BeamFoundry/rays/pkg/lang"
+)
+
+type TelemetryExporter struct {
+    Component
+}
+
+// Fulfills the BeamPreDestroy interface
+func (t *TelemetryExporter) PreDestroy() Error {
+    return t.flushAndClose()
+}
+```
+

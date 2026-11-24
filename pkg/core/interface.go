@@ -143,6 +143,15 @@ type BeamRunner interface {
 	Run(wg *sync.WaitGroup)
 }
 
+// BeamPreDestroy represents an interface with a PreDestroy function for a [Beam].
+//
+// PreDestroy is called when [ContainerConfiguration.Shutdown] is invoked (or when [ContainerConfiguration.Run]
+// finishes after all [BeamRunner]s exit), allowing singleton Beams to release resources and flush pending work.
+type BeamPreDestroy interface {
+	// PreDestroy() is called during container shutdown to release resources held by the Beam.
+	PreDestroy() Error
+}
+
 // BeamProvider is an interface representing a compile-in type which can provide Beams using a predefined stereotype.
 //
 // There is four main [Stereotype] : [Service], [Component], [Repository] and [Controller].
@@ -252,6 +261,11 @@ type ContainerConfiguration interface {
 	// SetLoggingHandler() lets define a different log handler, override the current log mecanism.
 	SetLoggingHandler(handler func(io.Writer, *slog.HandlerOptions) slog.Handler)
 
+	// WrapLoggingHandler() registers a wrapper function to decorate the active [slog.Handler].
+	// Wrappers are applied in registration order around the configured logging handler,
+	// including any loggers already cloned for specific packages or types.
+	WrapLoggingHandler(wrapper func(slog.Handler) slog.Handler)
+
 	// SetActiveProfiles() set the list of active profiles
 	SetActiveProfiles([]string) Error
 
@@ -291,6 +305,9 @@ type ContainerConfiguration interface {
 
 	// Run will call all the BeamRunner Beams.
 	Run()
+
+	// Shutdown() invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams that implement it.
+	Shutdown() Error
 }
 
 // TransactionProvider represents a non-generic transaction provider managed by [TransactionManager].

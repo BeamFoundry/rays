@@ -64,6 +64,15 @@ func (this *BootLoader) SetLoggingHandler(handler func(io.Writer, *slog.HandlerO
 	this.handler = handler
 }
 
+// WrapLoggingHandler registers a wrapper function to decorate the active slog.Handler.
+// Wrappers are applied in registration order around the configured logging handler,
+// including any loggers already cloned for specific packages or types.
+func (this *BootLoader) WrapLoggingHandler(wrapper func(slog.Handler) slog.Handler) {
+	this.lock.Lock()
+	defer this.lock.Unlock()
+	this.logger.WrapHandler(wrapper)
+}
+
 // LoggingProperties returns the unmarshaled logging configuration properties
 // populated during the bootstrap sequence, or nil if Boot has not yet been invoked.
 func (this *BootLoader) LoggingProperties() *LoggingProperties {

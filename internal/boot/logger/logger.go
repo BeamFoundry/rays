@@ -35,12 +35,58 @@ func (this Logger) New() *Logger {
 	this.handlerFunc = defaultHandlerfunc
 	this.options = defaultHandlerOptions()
 	handler := this.handlerFunc(this.output, handlerOptions)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 	return &this
+}
+
+func (this *Logger) proxyHandler() *proxyHandler {
+	if this.Logger == nil {
+		return nil
+	}
+	if p, ok := this.Logger.Handler().(*proxyHandler); ok {
+		return p
+	}
+	return nil
+}
+
+// Handler returns the effective slog.Handler for this Logger.
+func (this *Logger) Handler() slog.Handler {
+	if p := this.proxyHandler(); p != nil {
+		return p.resolve()
+	}
+	if this.Logger == nil {
+		return nil
+	}
+	return this.Logger.Handler()
+}
+
+func (this *Logger) setEffectiveHandler(handler slog.Handler) {
+	var shared *wrapperChain
+	if p := this.proxyHandler(); p != nil && p.shared != nil {
+		shared = p.shared
+	} else {
+		shared = &wrapperChain{}
+	}
+	this.Logger = slog.New(newProxyHandler(handler, shared))
+}
+
+// WrapHandler registers a wrapper function to decorate the underlying slog.Handler
+// for this Logger and all of its cloned instances.
+func (this *Logger) WrapHandler(wrapper func(slog.Handler) slog.Handler) {
+	if wrapper == nil {
+		return
+	}
+	if p := this.proxyHandler(); p != nil {
+		p.shared.add(wrapper)
+	}
 }
 
 // Clone creates a duplicate copy of the Logger with independent configuration.
 func (this *Logger) Clone() *Logger {
+	var shared *wrapperChain
+	if p := this.proxyHandler(); p != nil {
+		shared = p.shared
+	}
 	logger := &Logger{
 		output:      this.output,
 		handlerFunc: this.handlerFunc,
@@ -51,7 +97,7 @@ func (this *Logger) Clone() *Logger {
 	}
 	handler := logger.handlerFunc(logger.output, logger.options)
 	handler = logger.applyHandlerSettings(handler)
-	logger.Logger = slog.New(handler)
+	logger.Logger = slog.New(newProxyHandler(handler, shared))
 	return logger
 }
 
@@ -110,7 +156,7 @@ func (this *Logger) AddSource() {
 	this.options.AddSource = true
 	handler := this.handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 }
 
 // SetHandler configures a new handler factory function and rebuilds the underlying slog.Logger.
@@ -118,7 +164,7 @@ func (this *Logger) SetHandler(handlerFunc func(io.Writer, *slog.HandlerOptions)
 	this.handlerFunc = handlerFunc
 	handler := handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 }
 
 // SetLogLevel sets the minimum logging level required to emit records.
@@ -126,7 +172,7 @@ func (this *Logger) SetLogLevel(level slog.Level) {
 	this.options.Level = level
 	handler := this.handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 }
 
 // SetOutput redirects logging output to the specified io.Writer.
@@ -134,21 +180,28 @@ func (this *Logger) SetOutput(output io.Writer) {
 	this.output = output
 	handler := this.handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
+}
+
+func (this *Logger) rawHandler() slog.Handler {
+	if p := this.proxyHandler(); p != nil {
+		return p.rootBase
+	}
+	return nil
 }
 
 // SetFormat configures the pattern layout format on the underlying handler if supported.
 func (this *Logger) SetFormat(format string) {
 	this.format = format
 	this.formatSet = true
-	if h, ok := this.Handler().(interface{ SetFormat(string) }); ok {
+	if h, ok := this.rawHandler().(interface{ SetFormat(string) }); ok {
 		h.SetFormat(format)
 	}
 }
 
 // GetFormat returns the currently configured pattern layout format string.
 func (this *Logger) GetFormat() string {
-	if h, ok := this.Handler().(interface{ GetFormat() string }); ok {
+	if h, ok := this.rawHandler().(interface{ GetFormat() string }); ok {
 		return h.GetFormat()
 	}
 	return this.format
@@ -157,7 +210,7 @@ func (this *Logger) GetFormat() string {
 // SetColor explicitly forces ANSI color output on or off.
 func (this *Logger) SetColor(enabled bool) {
 	this.color = &enabled
-	if h, ok := this.Handler().(interface{ SetColor(bool) }); ok {
+	if h, ok := this.rawHandler().(interface{ SetColor(bool) }); ok {
 		h.SetColor(enabled)
 	}
 }
@@ -165,7 +218,7 @@ func (this *Logger) SetColor(enabled bool) {
 // EnableColor sets ANSI color output to automatic detection based on terminal capability.
 func (this *Logger) EnableColor() {
 	this.color = nil
-	switch h := this.Handler().(type) {
+	switch h := this.rawHandler().(type) {
 	case interface{ EnableColor() }:
 		h.EnableColor()
 	case interface{ SetColor(bool) }:
@@ -176,7 +229,7 @@ func (this *Logger) EnableColor() {
 
 // IsColor reports whether ANSI color output is enabled.
 func (this *Logger) IsColor() bool {
-	if h, ok := this.Handler().(interface{ IsColor() bool }); ok {
+	if h, ok := this.rawHandler().(interface{ IsColor() bool }); ok {
 		return h.IsColor()
 	}
 	if this.color != nil {
@@ -193,8 +246,11 @@ func (this *Logger) Reset() {
 	this.color = nil
 	this.handlerFunc = defaultHandlerfunc
 	handlerOptions = defaultHandlerOptions()
+	if p := this.proxyHandler(); p != nil && p.shared != nil {
+		p.shared.clear()
+	}
 	handler := this.handlerFunc(this.output, this.cloneOptions())
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 }
 
 // Fatal logs a message at LevelFatal using context.Background().
@@ -250,7 +306,7 @@ func (this *Logger) SetHandlerOptions(options *slog.HandlerOptions) {
 	this.options = options
 	handler := this.handlerFunc(this.output, this.cloneOptions())
 	handler = this.applyHandlerSettings(handler)
-	this.Logger = slog.New(handler)
+	this.setEffectiveHandler(handler)
 }
 
 // cloneOptions returns a copy of the logger's HandlerOptions.

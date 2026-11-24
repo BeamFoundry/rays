@@ -401,4 +401,34 @@ func (this *Container) Run() {
 	}
 
 	wg.Wait()
+	//nolint:errcheck // Errors are already logged inside Shutdown
+	_ = this.Shutdown()
+}
+
+// Shutdown invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams that implement it.
+func (this *Container) Shutdown() Error {
+	var firstErr Error
+	preDestroy := reflect.TypeFor[BeamPreDestroy]()
+	singleton := BeamScope{}.New().SINGLETON
+	initialized := InstanceStatus{}.New().INITIALIZED
+
+	for _, beam := range this.FindBeams(preDestroy) {
+		if beam.Scope() != singleton {
+			continue
+		}
+		instance := this.GetBeamDefaultInstance(beam)
+		if instance == nil || instance.Status().Compare(initialized) < 0 {
+			continue
+		}
+		if pd, ok := instance.Get().(BeamPreDestroy); ok {
+			if err := pd.PreDestroy(); err != nil {
+				err.LogError()
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+
+	return firstErr
 }
