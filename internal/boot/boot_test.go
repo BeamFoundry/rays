@@ -233,6 +233,18 @@ var _ = Describe("BootLoader", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
+	It("can wrap logging handlers across boot and cloned loggers", func() {
+		var wrappedCalls int
+		bl.WrapLoggingHandler(func(next slog.Handler) slog.Handler {
+			wrappedCalls++
+			return next
+		})
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		cloned := bl.LoggerForType(nil)
+		cloned.Info("hello")
+		Expect(wrappedCalls).To(BeNumerically(">=", 1))
+	})
+
 	It("can reset properly and restore standard-library default logger", func() {
 		Expect(bl.Boot()).NotTo(HaveOccurred())
 		bootedDefault := slog.Default()
