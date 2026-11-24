@@ -405,14 +405,13 @@ func (this *Container) Run() {
 	_ = this.Shutdown()
 }
 
-// Shutdown invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams that implement it.
+// Shutdown invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams whose concrete instance implements it.
 func (this *Container) Shutdown() Error {
 	var firstErr Error
-	preDestroy := reflect.TypeFor[BeamPreDestroy]()
 	singleton := BeamScope{}.New().SINGLETON
 	initialized := InstanceStatus{}.New().INITIALIZED
 
-	for _, beam := range this.FindBeams(preDestroy) {
+	for _, beam := range this.GetAllBeams() {
 		if beam.Scope() != singleton {
 			continue
 		}

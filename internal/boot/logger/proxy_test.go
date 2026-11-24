@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -152,4 +153,40 @@ var _ = Describe("Logger WrapHandler proxy", func() {
 		close(start)
 		wg.Wait()
 	})
+
+	It("resolves LogValuer attributes (including inside groups) once at WithAttrs time", func() {
+		var buf bytes.Buffer
+		lg := logger.NewLogger()
+		lg.SetOutput(&buf)
+		lg.SetColor(false)
+
+		calls := 0
+		valuer := countingValuer{calls: &calls}
+
+		child := lg.With(
+			"top", valuer,
+			slog.Group("nested", slog.Any("inner", valuer)),
+		)
+		Expect(calls).To(Equal(2))
+
+		// Registering a new wrapper replays ops without re-evaluating LogValuer
+		lg.WrapHandler(func(next slog.Handler) slog.Handler {
+			return next
+		})
+
+		child.Info("valuer-msg")
+		Expect(calls).To(Equal(2))
+		out := buf.String()
+		Expect(out).To(ContainSubstring("top=resolved-1"))
+		Expect(out).To(ContainSubstring("nested.inner=resolved-2"))
+	})
 })
+
+type countingValuer struct {
+	calls *int
+}
+
+func (this countingValuer) LogValue() slog.Value {
+	*this.calls++
+	return slog.StringValue("resolved-" + strconv.Itoa(*this.calls))
+}
