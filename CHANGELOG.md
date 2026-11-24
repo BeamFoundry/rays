@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0-rc3](https://github.com/BeamFoundry/rays/compare/v0.5.0-rc2...v0.5.0-rc3) (2026-11-24)
+
+
+### Features
+
+* **core,logger:** add WrapLoggingHandler and BeamPreDestroy shutdown… ([#31](https://github.com/BeamFoundry/rays/issues/31)) ([cbca01b](https://github.com/BeamFoundry/rays/commit/cbca01bc69863617dfb77bb77a29f6ff981a6c94))
+
+
+### Miscellaneous Chores
+
+* **release:** Prepare version 0.5.0-rc3 ([2cfc3e4](https://github.com/BeamFoundry/rays/commit/2cfc3e4039a94e6f90d8751403f267f81a9596ca))
+
 ## [0.5.0-rc2](https://github.com/BeamFoundry/rays/compare/v0.5.0-rc1...v0.5.0-rc2) (2026-11-20)
 
 
