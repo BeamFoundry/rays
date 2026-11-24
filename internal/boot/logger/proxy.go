@@ -98,6 +98,9 @@ type proxyHandler struct {
 }
 
 func newProxyHandler(base slog.Handler, shared *wrapperChain) *proxyHandler {
+	if shared == nil {
+		shared = &wrapperChain{}
+	}
 	return &proxyHandler{
 		rootBase: base,
 		shared:   shared,

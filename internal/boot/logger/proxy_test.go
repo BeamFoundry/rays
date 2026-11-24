@@ -125,6 +125,16 @@ var _ = Describe("Logger WrapHandler proxy", func() {
 		nonProxy := logger.Logger{Logger: slog.New(slog.DiscardHandler)}
 		Expect(nonProxy.Handler()).NotTo(BeNil())
 		Expect(nonProxy.GetFormat()).To(BeEmpty())
+		nonProxy.SetHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+			return slog.NewTextHandler(w, opts)
+		})
+		// Force non-proxy Logger.Logger again, then Clone() so shared == nil in newProxyHandler
+		nonProxy.Logger = slog.New(slog.DiscardHandler)
+		nonProxy.SetOutput(&bytes.Buffer{})
+		nonProxy.Logger = slog.New(slog.DiscardHandler)
+		clonedFromNonProxy := nonProxy.Clone()
+		clonedFromNonProxy.WrapHandler(func(next slog.Handler) slog.Handler { return next })
+		clonedFromNonProxy.Info("from-non-proxy-clone")
 
 		lg := logger.NewLogger()
 		lg.SetOutput(&bytes.Buffer{})
