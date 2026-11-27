@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-rc3](https://github.com/BeamFoundry/rays/compare/v0.5.0-rc3...v0.6.0-rc3) (2026-11-27)
+
+
+### Features
+
+* **scheduler,container:** add fixed-pool task scheduler, Scheduled a… ([#34](https://github.com/BeamFoundry/rays/issues/34)) ([8af8845](https://github.com/BeamFoundry/rays/commit/8af8845dc2bb898ea37a283113f866e52acbdda7))
+
 ## [0.5.0-rc3](https://github.com/BeamFoundry/rays/compare/v0.5.0-rc2...v0.5.0-rc3) (2026-11-24)
 
 
