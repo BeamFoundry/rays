@@ -438,6 +438,36 @@ var _ = Describe("Container Shutdown", func() {
 		mu.Lock()
 		Expect(events).To(Equal([]string{"RunSyncShutdown", "PreDestroy", "Shutdown"}))
 		mu.Unlock()
+
+		// Subsequent Shutdown after Run completed must not rerun PreDestroy or Shutdown hooks.
+		Expect(GetContainer().Shutdown()).NotTo(HaveOccurred())
+		mu.Lock()
+		Expect(events).To(Equal([]string{"RunSyncShutdown", "PreDestroy", "Shutdown"}))
+		mu.Unlock()
+	})
+
+	It("runs direct Shutdown teardown at most once and returns the recorded error on subsequent calls", func() {
+		var mu sync.Mutex
+		var events []string
+		ordered := &orderedLifecycleBeam{
+			mu:          &mu,
+			events:      &events,
+			shutdownErr: NewError("ShutdownError", "once-only error"),
+		}
+		_, err := GetContainer().AddBeamFor(ordered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		firstErr := GetContainer().Shutdown()
+		Expect(firstErr).To(HaveOccurred())
+		Expect(firstErr.Message()).To(Equal("once-only error"))
+
+		secondErr := GetContainer().Shutdown()
+		Expect(secondErr).To(Equal(firstErr))
+
+		mu.Lock()
+		Expect(events).To(Equal([]string{"PreDestroy", "Shutdown"}))
+		mu.Unlock()
 	})
 })
 

@@ -506,15 +506,20 @@ runLoop:
 	this.runLock.Lock()
 	this.shutdownErr = err
 	this.shutdownCh = nil
-	this.cleanupDone = nil
 	this.runLock.Unlock()
 	close(cleanupDone)
 }
 
-// Shutdown unblocks an active [Container.Run] call and waits for its teardown to complete,
-// or performs teardown directly if [Container.Run] is not active.
-// If invoked from inside a scheduler worker callback or synchronously from [Container.Run],
-// Shutdown signals teardown and returns immediately without deadlocking on its own completion.
+// Shutdown triggers and waits for container teardown (stopping the scheduler and invoking
+// [BeamPreDestroy.PreDestroy] followed by [BeamShutdown.Shutdown] on initialized singleton Beams).
+//
+// Teardown executes at most once per initialization cycle (until [Container.Reset] is called):
+//   - If [Container.Run] is active, Shutdown unblocks Run and waits for its teardown to complete
+//     (unless invoked from inside a scheduler worker or synchronously from Run, in which case it
+//     signals teardown and returns nil immediately without deadlocking on its own completion).
+//   - If [Container.Run] has already completed or Shutdown was already called, Shutdown returns
+//     the recorded teardown error without rerunning singleton hooks.
+//   - If [Container.Run] was never called, Shutdown runs teardown directly once and records the result.
 func (this *Container) Shutdown() Error {
 	this.runLock.Lock()
 	done := this.cleanupDone
@@ -533,9 +538,18 @@ func (this *Container) Shutdown() Error {
 		this.runLock.Unlock()
 		return err
 	}
+
+	cleanupDone := make(chan struct{})
+	this.cleanupDone = cleanupDone
 	this.runLock.Unlock()
 
-	return this.cleanup()
+	err := this.cleanup()
+
+	this.runLock.Lock()
+	this.shutdownErr = err
+	this.runLock.Unlock()
+	close(cleanupDone)
+	return err
 }
 
 // cleanup stops the scheduler and then invokes [BeamPreDestroy.PreDestroy] followed by
