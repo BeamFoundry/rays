@@ -469,7 +469,82 @@ var _ = Describe("Container Shutdown", func() {
 		Expect(events).To(Equal([]string{"PreDestroy", "Shutdown"}))
 		mu.Unlock()
 	})
+
+	It("allows re-entrant Shutdown inside PreDestroy during direct Shutdown while external callers still wait", func() {
+		gate := make(chan struct{})
+		release := make(chan struct{})
+		beam := &reentrantPreDestroyBeam{
+			gate:    gate,
+			release: release,
+			err:     NewError("ShutdownError", "reentrant teardown error"),
+		}
+		_, err := GetContainer().AddBeamFor(beam)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		primaryErrCh := make(chan Error, 1)
+		go func() {
+			primaryErrCh <- GetContainer().Shutdown()
+		}()
+
+		Eventually(gate, time.Second).Should(BeClosed())
+
+		externalErrCh := make(chan Error, 1)
+		go func() {
+			externalErrCh <- GetContainer().Shutdown()
+		}()
+
+		// External caller must wait until direct teardown completes
+		Consistently(externalErrCh, 20*time.Millisecond).ShouldNot(Receive())
+		close(release)
+
+		var primaryErr, externalErr Error
+		Eventually(primaryErrCh, time.Second).Should(Receive(&primaryErr))
+		Eventually(externalErrCh, time.Second).Should(Receive(&externalErr))
+		Expect(primaryErr).To(HaveOccurred())
+		Expect(primaryErr.Message()).To(Equal("reentrant teardown error"))
+		Expect(externalErr).To(Equal(primaryErr))
+		Expect(beam.reentrantErr).NotTo(HaveOccurred())
+		Expect(beam.preDestroyCalls.Load()).To(Equal(int32(1)))
+	})
+
+	It("aborts Run without starting runners or rerunning cleanup when Shutdown has already run", func() {
+		runner := &runnerWithPreDestroy{}
+		sdBeam := &shutdownErrBeam{err: NewError("ShutdownError", "recorded before run")}
+		_, err := GetContainer().AddBeamFor(runner)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = GetContainer().AddBeamFor(sdBeam)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		firstErr := GetContainer().Shutdown()
+		Expect(firstErr).To(HaveOccurred())
+		Expect(firstErr.Message()).To(Equal("recorded before run"))
+
+		// Run after Shutdown must abort without starting runners or overwriting shutdownErr
+		GetContainer().Run()
+		Expect(runner.ran).To(BeFalse())
+		Expect(GetContainer().Shutdown()).To(Equal(firstErr))
+	})
 })
+
+type reentrantPreDestroyBeam struct {
+	Component
+	IgnoreScanning
+	gate            chan struct{}
+	release         chan struct{}
+	err             Error
+	reentrantErr    Error
+	preDestroyCalls atomic.Int32
+}
+
+func (this *reentrantPreDestroyBeam) PreDestroy() Error {
+	this.preDestroyCalls.Add(1)
+	this.reentrantErr = GetContainer().Shutdown()
+	close(this.gate)
+	<-this.release
+	return this.err
+}
 
 type syncShutdownRunnerBeam struct {
 	Component

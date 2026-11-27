@@ -432,26 +432,35 @@ func (this *Container) Reset() {
 	this.scanfor = reflect.TypeFor[Stereotype]()
 }
 
+// Run starts all [BeamRunner] Beams and the task scheduler, blocking until all runners exit,
+// an OS termination signal (SIGINT/SIGTERM) arrives, or [Container.Shutdown] is invoked.
+// Run aborts without starting runners if the container is not initialized or has already
+// been started or shut down (until [Container.Reset] is called).
 func (this *Container) Run() {
 	if !this.isInitialized() {
 		services.Get().Logger.Error("Container is not initialized, aborting Run()")
 		return
 	}
 
+	shutdownCh := make(chan struct{})
+	cleanupDone := make(chan struct{})
+
+	this.runLock.Lock()
+	if this.cleanupDone != nil {
+		this.runLock.Unlock()
+		services.Get().Logger.Error("Container is already running or shut down, aborting Run()")
+		return
+	}
+	this.shutdownCh = shutdownCh
+	this.cleanupDone = cleanupDone
+	this.shutdownErr = nil
+	this.runLock.Unlock()
+
 	this.runLocal.Set(true)
 	defer this.runLocal.Remove()
 
 	ctx, stopSignals := notifySignalContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-
-	shutdownCh := make(chan struct{})
-	cleanupDone := make(chan struct{})
-
-	this.runLock.Lock()
-	this.shutdownCh = shutdownCh
-	this.cleanupDone = cleanupDone
-	this.shutdownErr = nil
-	this.runLock.Unlock()
 
 	// Start the scheduler synchronously before launching BeamRunners so recurring
 	// Schedule*Task calls are rejected and dynamic LaunchTask calls execute immediately.
@@ -515,8 +524,8 @@ runLoop:
 //
 // Teardown executes at most once per initialization cycle (until [Container.Reset] is called):
 //   - If [Container.Run] is active, Shutdown unblocks Run and waits for its teardown to complete
-//     (unless invoked from inside a scheduler worker or synchronously from Run, in which case it
-//     signals teardown and returns nil immediately without deadlocking on its own completion).
+//     (unless invoked from inside a scheduler worker or synchronously from Run/teardown, in which
+//     case it signals teardown and returns nil immediately without deadlocking on its own completion).
 //   - If [Container.Run] has already completed or Shutdown was already called, Shutdown returns
 //     the recorded teardown error without rerunning singleton hooks.
 //   - If [Container.Run] was never called, Shutdown runs teardown directly once and records the result.
@@ -542,6 +551,9 @@ func (this *Container) Shutdown() Error {
 	cleanupDone := make(chan struct{})
 	this.cleanupDone = cleanupDone
 	this.runLock.Unlock()
+
+	this.runLocal.Set(true)
+	defer this.runLocal.Remove()
 
 	err := this.cleanup()
 
