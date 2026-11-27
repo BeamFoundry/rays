@@ -91,6 +91,8 @@ func (this *BootLoader) SetLoggingHandler(handler func(io.Writer, *slog.HandlerO
 // Wrappers are applied in registration order around the configured logging handler,
 // including any loggers already cloned for specific packages or types.
 func (this *BootLoader) WrapLoggingHandler(wrapper func(slog.Handler) slog.Handler) {
+	this.lock.Lock()
+	defer this.lock.Unlock()
 	this.logger.WrapHandler(wrapper)
 }
 

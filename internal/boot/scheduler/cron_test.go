@@ -176,5 +176,26 @@ var _ = Describe("CronExpression", func() {
 			Expect(parseErr).NotTo(HaveOccurred())
 			Expect(exprInGap.Next(from)).To(Equal(time.Date(2027, time.March, 8, 2, 15, 0, 0, nyLoc)))
 		})
+
+		It("returns both matching occurrences during an America/New_York DST fall-back repeated hour", func() {
+			nyLoc, err := time.LoadLocation("America/New_York")
+			Expect(err).NotTo(HaveOccurred())
+
+			// 2026-11-01 is the US fall-back date (01:59:59 EDT -0400 -> 01:00:00 EST -0500).
+			expr, parseErr := scheduler.ParseCron("0 30 1 1 11 *")
+			Expect(parseErr).NotTo(HaveOccurred())
+
+			beforeFirst := time.Date(2026, time.November, 1, 1, 0, 0, 0, nyLoc)
+			first := expr.Next(beforeFirst)
+			Expect(first.Format(time.RFC3339)).To(Equal("2026-11-01T01:30:00-04:00"))
+
+			second := expr.Next(first)
+			Expect(second.Format(time.RFC3339)).To(Equal("2026-11-01T01:30:00-05:00"))
+			Expect(second.After(first)).To(BeTrue())
+
+			// Starting inside the second repeated hour must advance forward, never jump back to EDT.
+			inSecondHour := second.Add(-10 * time.Minute)
+			Expect(expr.Next(inSecondHour)).To(Equal(second))
+		})
 	})
 })

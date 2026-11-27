@@ -417,7 +417,58 @@ var _ = Describe("Container Shutdown", func() {
 		Expect(runner.launchErr).NotTo(HaveOccurred())
 		Expect(runner.launchedRan.Load()).To(BeTrue())
 	})
+
+	It("allows a BeamRunner to request Shutdown synchronously inside Run without deadlocking", func() {
+		var mu sync.Mutex
+		var events []string
+		runner := &syncShutdownRunnerBeam{mu: &mu, events: &events}
+		_, err := GetContainer().AddBeamFor(runner)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		runDone := make(chan struct{})
+		go func() {
+			GetContainer().Run()
+			close(runDone)
+		}()
+
+		Eventually(runDone, time.Second).Should(BeClosed())
+		Expect(runner.shutdownErr).NotTo(HaveOccurred())
+
+		mu.Lock()
+		Expect(events).To(Equal([]string{"RunSyncShutdown", "PreDestroy", "Shutdown"}))
+		mu.Unlock()
+	})
 })
+
+type syncShutdownRunnerBeam struct {
+	Component
+	IgnoreScanning
+	mu          *sync.Mutex
+	events      *[]string
+	shutdownErr Error
+}
+
+func (this *syncShutdownRunnerBeam) Run(_ *sync.WaitGroup) {
+	this.shutdownErr = GetContainer().Shutdown()
+	this.mu.Lock()
+	*this.events = append(*this.events, "RunSyncShutdown")
+	this.mu.Unlock()
+}
+
+func (this *syncShutdownRunnerBeam) PreDestroy() Error {
+	this.mu.Lock()
+	*this.events = append(*this.events, "PreDestroy")
+	this.mu.Unlock()
+	return nil
+}
+
+func (this *syncShutdownRunnerBeam) Shutdown() Error {
+	this.mu.Lock()
+	*this.events = append(*this.events, "Shutdown")
+	this.mu.Unlock()
+	return nil
+}
 
 type scheduledShutdownBeam struct {
 	Service

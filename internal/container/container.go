@@ -15,6 +15,8 @@ import (
 
 	"github.com/BeamFoundry/rays/internal/boot"
 	"github.com/BeamFoundry/rays/internal/services"
+	"github.com/timandy/routine"
+
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
@@ -26,6 +28,7 @@ type Container struct {
 	*Registry
 	scanfor     reflect.Type
 	shutdownErr Error
+	runLocal    routine.ThreadLocal[bool]
 	shutdownCh  chan struct{}
 	cleanupDone chan struct{}
 	lock        sync.Mutex
@@ -45,6 +48,7 @@ var _container = &Container{
 	BootLoader: boot.NewBootLoader(),
 	Registry:   NewRegistry(),
 	scanfor:    reflect.TypeFor[Stereotype](),
+	runLocal:   routine.NewThreadLocal[bool](),
 }
 
 func GetContainer() *Container {
@@ -434,6 +438,9 @@ func (this *Container) Run() {
 		return
 	}
 
+	this.runLocal.Set(true)
+	defer this.runLocal.Remove()
+
 	ctx, stopSignals := notifySignalContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
@@ -456,10 +463,16 @@ func (this *Container) Run() {
 	var wg sync.WaitGroup
 	runner := reflect.TypeFor[BeamRunner]()
 
+runLoop:
 	for _, beam := range this.FindBeams(runner) {
 		instance := this.GetBeamDefaultInstance(beam)
 		if run, ok := instance.Get().(BeamRunner); ok {
 			run.Run(&wg)
+			select {
+			case <-shutdownCh:
+				break runLoop
+			default:
+			}
 		}
 	}
 
@@ -500,8 +513,8 @@ func (this *Container) Run() {
 
 // Shutdown unblocks an active [Container.Run] call and waits for its teardown to complete,
 // or performs teardown directly if [Container.Run] is not active.
-// If invoked from inside a scheduler worker callback, Shutdown signals teardown and returns
-// immediately so [Scheduler.Stop] can wait for the callback to finish without deadlocking.
+// If invoked from inside a scheduler worker callback or synchronously from [Container.Run],
+// Shutdown signals teardown and returns immediately without deadlocking on its own completion.
 func (this *Container) Shutdown() Error {
 	this.runLock.Lock()
 	done := this.cleanupDone
@@ -511,7 +524,7 @@ func (this *Container) Shutdown() Error {
 			this.shutdownCh = nil
 		}
 		this.runLock.Unlock()
-		if this.Scheduler().InWorker() {
+		if this.Scheduler().InWorker() || this.runLocal.Get() {
 			return nil
 		}
 		<-done

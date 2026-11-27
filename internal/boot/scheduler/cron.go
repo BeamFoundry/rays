@@ -135,15 +135,11 @@ func (this *CronExpression) Next(from time.Time) time.Time {
 			continue
 		}
 		if this.hours&(uint64(1)<<t.Hour()) == 0 {
-			next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
-			if !next.After(t) {
-				next = t.Add(time.Duration(60-t.Minute())*time.Minute - time.Duration(t.Second())*time.Second)
-			}
-			t = next
+			t = t.Add(time.Duration(60-t.Minute())*time.Minute - time.Duration(t.Second())*time.Second)
 			continue
 		}
 		if this.minutes&(uint64(1)<<t.Minute()) == 0 {
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute()+1, 0, 0, t.Location())
+			t = t.Add(time.Duration(60-t.Second()) * time.Second)
 			continue
 		}
 		if this.seconds&(uint64(1)<<t.Second()) == 0 {
