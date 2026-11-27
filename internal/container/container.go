@@ -413,9 +413,21 @@ func (this *Container) WrapLoggingHandler(wrapper func(slog.Handler) slog.Handle
 	this.BootLoader.WrapLoggingHandler(wrapper)
 }
 
+// Reset drains any active [Container.Run] or in-progress [Container.Shutdown], stops the
+// scheduler, and restores the container, registry, and bootloader to their initial uninitialized
+// state. Reset is intended for test teardown and must not be called concurrently with a new
+// [Container.Initialize] or [Container.Run] call.
 func (this *Container) Reset() {
-	// Stop running tasks before acquiring Container.lock or resetting Registry so
-	// active tasks cannot deadlock against Reset or observe half-reset state.
+	this.runLock.Lock()
+	active := this.cleanupDone != nil
+	this.runLock.Unlock()
+	if active {
+		//nolint:errcheck // Teardown errors are already logged inside cleanup
+		_ = this.Shutdown()
+	}
+
+	// Stop any tasks queued or launched outside Run before acquiring Container.lock or resetting Registry
+	// so active tasks cannot deadlock against Reset or observe half-reset state.
 	this.Scheduler().Stop()
 
 	this.lock.Lock()
@@ -434,8 +446,8 @@ func (this *Container) Reset() {
 
 // Run starts all [BeamRunner] Beams and the task scheduler, blocking until all runners exit,
 // an OS termination signal (SIGINT/SIGTERM) arrives, or [Container.Shutdown] is invoked.
-// Run aborts without starting runners if the container is not initialized or has already
-// been started or shut down (until [Container.Reset] is called).
+// Run aborts without starting runners if the container is not initialized, has already been
+// started or shut down (until [Container.Reset] is called), or if the scheduler is already stopped.
 func (this *Container) Run() {
 	if !this.isInitialized() {
 		services.Get().Logger.Error("Container is not initialized, aborting Run()")
@@ -451,6 +463,16 @@ func (this *Container) Run() {
 		services.Get().Logger.Error("Container is already running or shut down, aborting Run()")
 		return
 	}
+	// Start the scheduler synchronously before launching BeamRunners so recurring
+	// Schedule*Task calls are rejected and dynamic LaunchTask calls execute immediately.
+	// Checked before claiming cleanupDone so a stopped scheduler leaves Shutdown() unblocked.
+	sched := this.Scheduler()
+	hasTasks := sched.HasTasks()
+	if !sched.StartAsync() {
+		this.runLock.Unlock()
+		services.Get().Logger.Error("Scheduler is already stopped, aborting Run()")
+		return
+	}
 	this.shutdownCh = shutdownCh
 	this.cleanupDone = cleanupDone
 	this.shutdownErr = nil
@@ -461,13 +483,6 @@ func (this *Container) Run() {
 
 	ctx, stopSignals := notifySignalContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-
-	// Start the scheduler synchronously before launching BeamRunners so recurring
-	// Schedule*Task calls are rejected and dynamic LaunchTask calls execute immediately.
-	// Only add Wait to wg when tasks were registered prior to Run().
-	sched := this.Scheduler()
-	hasTasks := sched.HasTasks()
-	sched.StartAsync()
 
 	var wg sync.WaitGroup
 	runner := reflect.TypeFor[BeamRunner]()

@@ -526,6 +526,46 @@ var _ = Describe("Container Shutdown", func() {
 		Expect(runner.ran).To(BeFalse())
 		Expect(GetContainer().Shutdown()).To(Equal(firstErr))
 	})
+
+	It("aborts Run when the scheduler is already stopped without blocking a subsequent Shutdown", func() {
+		runner := &runnerWithPreDestroy{}
+		_, err := GetContainer().AddBeamFor(runner)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		container.GetContainer().Scheduler().Stop()
+
+		GetContainer().Run()
+		Expect(runner.ran).To(BeFalse())
+		Expect(runner.destroyed).To(BeFalse())
+
+		// Subsequent Shutdown must not block and must run direct teardown cleanly
+		Expect(GetContainer().Shutdown()).NotTo(HaveOccurred())
+		Expect(runner.destroyed).To(BeTrue())
+		Expect(runner.shutDown).To(BeTrue())
+	})
+
+	It("drains an active Run cleanly when Reset is called", func() {
+		runner := &blockingRunnerBeam{
+			started:  make(chan struct{}),
+			released: make(chan struct{}),
+		}
+		_, err := GetContainer().AddBeamFor(runner)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		runDone := make(chan struct{})
+		go func() {
+			GetContainer().Run()
+			close(runDone)
+		}()
+
+		Eventually(runner.started, time.Second).Should(BeClosed())
+
+		// Calling Reset while Run is active must trigger shutdown and wait for Run to finish
+		GetContainer().Reset()
+		Eventually(runDone, time.Second).Should(BeClosed())
+	})
 })
 
 type reentrantPreDestroyBeam struct {
