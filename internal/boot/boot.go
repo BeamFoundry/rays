@@ -9,27 +9,32 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/BeamFoundry/rays/internal/boot/config"
 	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/BeamFoundry/rays/internal/boot/scheduler"
 	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
 // BootLoader coordinates application initialization by orchestrating configuration
-// loading, logging setup, and dependency service registration across bootstrap phases.
+// loading, logging setup, scheduler initialization, and dependency service registration across bootstrap phases.
 type BootLoader struct {
 	*config.Config
-	loggingProperties *LoggingProperties
-	handler           func(io.Writer, *slog.HandlerOptions) slog.Handler
-	logger            *logger.Logger
-	loggers           []string
-	lock              sync.Mutex
+	loggingProperties   *LoggingProperties
+	schedulerProperties *SchedulerProperties
+	handler             func(io.Writer, *slog.HandlerOptions) slog.Handler
+	logger              *logger.Logger
+	scheduler           *scheduler.Scheduler
+	loggers             []string
+	lock                sync.Mutex
+	booted              atomic.Int32
 }
 
 // NewBootLoader creates and initializes a new BootLoader instance configured with
-// default logging properties and a quiet error-level logger for initial bootstrap.
+// default logging and scheduler properties and a quiet error-level logger for initial bootstrap.
 func NewBootLoader() *BootLoader {
 	cfg := config.NewConfig()
 	loggingDefaults := map[string]any{
@@ -42,23 +47,41 @@ func NewBootLoader() *BootLoader {
 	//nolint:errcheck // default config load at path cannot fail
 	cfg.LoadDefaultConfigAt(loggingDefaults, "rays.logging")
 
+	schedulerDefaults := map[string]any{
+		"pool": scheduler.DefaultPoolSize,
+	}
+	//nolint:errcheck // default config load at path cannot fail
+	cfg.LoadDefaultConfigAt(schedulerDefaults, "rays.scheduler")
+
 	quietLogger := logger.NewLogger()
 	quietLogger.SetLogLevel(slog.LevelError)
 	cfg.SetLogger(quietLogger)
+
+	defaultScheduler := scheduler.NewScheduler(scheduler.DefaultPoolSize)
+	defaultScheduler.SetLogger(quietLogger)
 	services.Register(&services.Registry{
-		Logger: quietLogger,
+		Logger:    quietLogger,
+		Scheduler: defaultScheduler,
 	})
 
 	return &BootLoader{
-		Config:  cfg,
-		logger:  quietLogger,
-		loggers: []string{},
+		Config:    cfg,
+		logger:    quietLogger,
+		scheduler: defaultScheduler,
+		loggers:   []string{},
 	}
 }
 
+func (this *BootLoader) isBooted() bool {
+	return this.booted.Load() == 1
+}
+
 // SetLoggingHandler sets a custom logging handler factory function to override the
-// default slog handler constructed during bootstrap.
+// default slog handler constructed during bootstrap. Calls after Boot are ignored.
 func (this *BootLoader) SetLoggingHandler(handler func(io.Writer, *slog.HandlerOptions) slog.Handler) {
+	if this.isBooted() {
+		return
+	}
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.handler = handler
@@ -79,14 +102,31 @@ func (this *BootLoader) LoggingProperties() *LoggingProperties {
 	return this.loggingProperties
 }
 
+// SchedulerProperties returns the unmarshaled scheduler configuration properties
+// populated during the bootstrap sequence, or nil if Boot has not yet been invoked.
+func (this *BootLoader) SchedulerProperties() *SchedulerProperties {
+	return this.schedulerProperties
+}
+
+// Scheduler returns a TaskScheduler proxy backed by the scheduler managed by this BootLoader.
+func (this *BootLoader) Scheduler() *TaskScheduler {
+	this.lock.Lock()
+	defer this.lock.Unlock()
+	return NewTaskScheduler(this.scheduler)
+}
+
 // Boot executes the bootstrap sequence:
 // 1. Initializes configuration files and profiles in a quiet phase.
 // 2. Extracts and unmarshals the "rays.logging" configuration section to reconfigure the logger.
-// 3. Registers the configured logger in the global services registry.
-// 4. Re-initializes the configuration container with full logging enabled.
+// 3. Extracts and unmarshals the "rays.scheduler" configuration section to initialize the task scheduler.
+// 4. Registers the configured logger and scheduler in the global services registry.
+// 5. Re-initializes the configuration container with full logging enabled.
 //
-// Returns an error if configuration parsing or unmarshaling fails.
+// Returns an error if already booted or if configuration parsing or unmarshaling fails.
 func (this *BootLoader) Boot() Error {
+	if this.isBooted() {
+		return NewError("InitializationError", "BootLoader is already booted")
+	}
 	this.lock.Lock()
 	defer this.lock.Unlock()
 
@@ -117,12 +157,22 @@ func (this *BootLoader) Boot() Error {
 	}
 	this.logger.SetDefault()
 
-	// 3. Register configured logger into services
-	services.Register(&services.Registry{
-		Logger: this.logger,
-	})
+	// 3. Initializing scheduler properties from parsed config
+	if cfg, err := this.GetSubConfig("rays.scheduler"); err == nil {
+		this.schedulerProperties = &SchedulerProperties{}
+		if err := cfg.Unmarshal(this.schedulerProperties); err != nil {
+			return err
+		}
+		this.scheduler.Stop()
+		this.scheduler = scheduler.NewScheduler(this.schedulerProperties.Pool())
+		this.scheduler.SetLogger(this.logger)
+	}
 
-	// 4. Primary functionality hooks (future extensions)
+	// 4. Register configured logger and scheduler into services
+	services.Register(&services.Registry{
+		Logger:    this.logger,
+		Scheduler: this.scheduler,
+	})
 
 	// 5. Reinitialize Config with the correct parameters (Phase 4)
 	this.Clear()
@@ -131,7 +181,8 @@ func (this *BootLoader) Boot() Error {
 		return err
 	}
 
-	this.logger.Debug("Config & Logging initialized")
+	this.booted.Store(1)
+	this.logger.Debug("Config, Logging & Scheduler initialized")
 	return nil
 }
 
@@ -216,20 +267,33 @@ func (this *BootLoader) LoggerForTypes(types ...reflect.Type) Logging {
 	return this.Logger()
 }
 
-// Reset restores the BootLoader, its underlying configuration container, and logging
-// state back to their initial unbooted condition.
+// Reset restores the BootLoader, its underlying configuration container, logging,
+// and scheduler state back to their initial unbooted condition.
 func (this *BootLoader) Reset() {
+	this.lock.Lock()
+	oldScheduler := this.scheduler
+	this.lock.Unlock()
+
+	// Stop running tasks without holding this.lock to prevent deadlocks if a task
+	// accesses BootLoader methods while Reset is waiting for tasks to finish.
+	oldScheduler.Stop()
+
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.Config.Reset()
 	this.handler = nil
 	this.loggingProperties = nil
+	this.schedulerProperties = nil
 	this.loggers = []string{}
 	this.logger.Reset()
 	this.logger.SetLogLevel(slog.LevelError)
 	this.logger.SetDefault()
 	this.SetLogger(this.logger)
+	this.scheduler = scheduler.NewScheduler(scheduler.DefaultPoolSize)
+	this.scheduler.SetLogger(this.logger)
+	this.booted.Store(0)
 	services.Register(&services.Registry{
-		Logger: this.logger,
+		Logger:    this.logger,
+		Scheduler: this.scheduler,
 	})
 }

@@ -145,11 +145,20 @@ type BeamRunner interface {
 
 // BeamPreDestroy represents an interface with a PreDestroy function for a [Beam].
 //
-// PreDestroy is called when [ContainerConfiguration.Shutdown] is invoked (or when [ContainerConfiguration.Run]
-// finishes after all [BeamRunner]s exit), allowing singleton Beams to release resources and flush pending work.
+// PreDestroy is called during container teardown when [ContainerConfiguration.Run] exits
+// (or when Shutdown is invoked in tests), allowing singleton Beams to release resources and flush pending work.
 type BeamPreDestroy interface {
-	// PreDestroy() is called during container shutdown to release resources held by the Beam.
+	// PreDestroy() is called during container teardown to release resources held by the Beam.
 	PreDestroy() Error
+}
+
+// BeamShutdown represents an interface with a Shutdown function for a [Beam].
+//
+// Shutdown is called during container teardown after [BeamPreDestroy.PreDestroy] has run
+// on all initialized singleton Beams.
+type BeamShutdown interface {
+	// Shutdown() is called during container teardown after PreDestroy hooks have completed.
+	Shutdown() Error
 }
 
 // BeamProvider is an interface representing a compile-in type which can provide Beams using a predefined stereotype.
@@ -305,9 +314,6 @@ type ContainerConfiguration interface {
 
 	// Run will call all the BeamRunner Beams.
 	Run()
-
-	// Shutdown() invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams that implement it.
-	Shutdown() Error
 }
 
 // TransactionProvider represents a non-generic transaction provider managed by [TransactionManager].
