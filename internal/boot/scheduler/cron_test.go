@@ -1,6 +1,8 @@
 package scheduler_test
 
 import (
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/BeamFoundry/rays/internal/boot/scheduler"
@@ -147,6 +149,32 @@ var _ = Describe("CronExpression", func() {
 
 			mon := expr.Next(sun)
 			Expect(mon).To(Equal(time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)))
+		})
+
+		It("handles large steps without integer overflow", func() {
+			expr, err := scheduler.ParseCron(fmt.Sprintf("1/%d * * * * *", math.MaxInt))
+			Expect(err).NotTo(HaveOccurred())
+
+			from := time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC)
+			Expect(expr.Next(from)).To(Equal(time.Date(2026, time.March, 15, 10, 0, 1, 0, time.UTC)))
+			Expect(expr.Next(time.Date(2026, time.March, 15, 10, 0, 1, 0, time.UTC))).
+				To(Equal(time.Date(2026, time.March, 15, 10, 1, 1, 0, time.UTC)))
+		})
+
+		It("advances past nonexistent hours on America/New_York DST spring-forward date", func() {
+			nyLoc, err := time.LoadLocation("America/New_York")
+			Expect(err).NotTo(HaveOccurred())
+
+			// 2026-03-08 is the US spring-forward date (01:59:59 EST -> 03:00:00 EDT).
+			from := time.Date(2026, time.March, 8, 1, 30, 0, 0, nyLoc)
+
+			exprAfterGap, parseErr := scheduler.ParseCron("0 0 3 8 3 *")
+			Expect(parseErr).NotTo(HaveOccurred())
+			Expect(exprAfterGap.Next(from)).To(Equal(time.Date(2026, time.March, 8, 3, 0, 0, 0, nyLoc)))
+
+			exprInGap, parseErr := scheduler.ParseCron("0 15 2 8 3 *")
+			Expect(parseErr).NotTo(HaveOccurred())
+			Expect(exprInGap.Next(from)).To(Equal(time.Date(2027, time.March, 8, 2, 15, 0, 0, nyLoc)))
 		})
 	})
 })

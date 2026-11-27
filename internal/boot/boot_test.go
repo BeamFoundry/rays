@@ -300,23 +300,43 @@ var _ = Describe("BootLoader", func() {
 		Expect(bl.Boot()).NotTo(HaveOccurred())
 		ts := bl.Scheduler()
 		Expect(ts.HasTasks()).To(BeFalse())
+		Expect(ts.InWorker()).To(BeFalse())
 
-		startDone := make(chan struct{})
+		var rateRuns atomic.Int32
+		Expect(ts.ScheduleTask(func() {
+			rateRuns.Add(1)
+		}, boot.ScheduleTypes.FIXED_RATE, "20ms")).NotTo(HaveOccurred())
+
+		var delayRuns atomic.Int32
+		Expect(ts.ScheduleTaskWithInitialDelay(func() {
+			delayRuns.Add(1)
+		}, boot.ScheduleTypes.FIXED_DELAY, "20ms", "10ms")).NotTo(HaveOccurred())
+
+		Expect(ts.ScheduleTask(func() {}, boot.ScheduleTypes.CRON, "0 0 0 1 1 *")).NotTo(HaveOccurred())
+		Expect(ts.ScheduleTask(func() {}, boot.ScheduleType{}, "10ms")).To(HaveOccurred())
+		Expect(ts.ScheduleTaskWithInitialDelay(func() {}, boot.ScheduleTypes.FIXED_RATE, "10ms", "invalid")).To(HaveOccurred())
+		Expect(ts.LaunchTask(nil)).To(HaveOccurred())
+		Expect(ts.HasTasks()).To(BeTrue())
+
+		Expect(ts.StartAsync()).To(BeTrue())
+		waitDone := make(chan struct{})
 		go func() {
-			ts.Start()
-			close(startDone)
+			ts.Wait()
+			close(waitDone)
 		}()
 		defer func() {
 			ts.Stop()
-			Eventually(startDone, time.Second).Should(BeClosed())
+			Eventually(waitDone, time.Second).Should(BeClosed())
 		}()
 
 		var launched atomic.Bool
+		var inWorker atomic.Bool
 		Expect(ts.LaunchTask(func() {
+			inWorker.Store(ts.InWorker())
 			launched.Store(true)
 		})).NotTo(HaveOccurred())
-		Expect(ts.HasTasks()).To(BeTrue())
 		Eventually(launched.Load, time.Second, 5*time.Millisecond).Should(BeTrue())
+		Expect(inWorker.Load()).To(BeTrue())
 
 		var delayed atomic.Bool
 		Expect(ts.LaunchTaskWithInitialDelay(func() {
@@ -324,21 +344,68 @@ var _ = Describe("BootLoader", func() {
 		}, "15ms")).NotTo(HaveOccurred())
 		Eventually(delayed.Load, time.Second, 5*time.Millisecond).Should(BeTrue())
 
-		var rateRuns atomic.Int32
-		Expect(ts.ScheduleTask(func() {
-			rateRuns.Add(1)
-		}, boot.ScheduleTypes.FIXED_RATE, "20ms")).NotTo(HaveOccurred())
 		Eventually(rateRuns.Load, time.Second, 5*time.Millisecond).Should(BeNumerically(">=", 2))
-
-		var delayRuns atomic.Int32
-		Expect(ts.ScheduleTaskWithInitialDelay(func() {
-			delayRuns.Add(1)
-		}, boot.ScheduleTypes.FIXED_DELAY, "20ms", "10ms")).NotTo(HaveOccurred())
 		Eventually(delayRuns.Load, time.Second, 5*time.Millisecond).Should(BeNumerically(">=", 2))
+	})
 
-		Expect(ts.ScheduleTask(func() {}, boot.ScheduleTypes.CRON, "0 0 0 1 1 *")).NotTo(HaveOccurred())
-		Expect(ts.ScheduleTask(func() {}, boot.ScheduleType{}, "10ms")).To(HaveOccurred())
-		Expect(ts.ScheduleTaskWithInitialDelay(func() {}, boot.ScheduleTypes.FIXED_RATE, "10ms", "invalid")).To(HaveOccurred())
-		Expect(ts.LaunchTask(nil)).To(HaveOccurred())
+	It("rejects a second Boot call and ignores SetLoggingHandler once booted until Reset", func() {
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		Expect(bl.Boot()).To(HaveOccurred())
+
+		calledAfterBoot := false
+		bl.SetLoggingHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+			calledAfterBoot = true
+			return slog.NewTextHandler(w, opts)
+		})
+		Expect(calledAfterBoot).To(BeFalse())
+
+		bl.Reset()
+
+		calledAfterReset := false
+		bl.SetLoggingHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+			calledAfterReset = true
+			return slog.NewTextHandler(w, opts)
+		})
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		Expect(calledAfterReset).To(BeTrue())
+	})
+
+	It("does not deadlock when Reset waits for a task accessing BootLoader methods", func() {
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		ts := bl.Scheduler()
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+		Expect(ts.LaunchTask(func() {
+			close(started)
+			<-release
+			bl.SetLoggingHandler(func(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+				return slog.NewTextHandler(w, opts)
+			})
+			bl.WrapLoggingHandler(func(next slog.Handler) slog.Handler {
+				return next
+			})
+			Expect(bl.Scheduler()).NotTo(BeNil())
+		})).NotTo(HaveOccurred())
+
+		startDone := make(chan struct{})
+		go func() {
+			ts.Start()
+			close(startDone)
+		}()
+
+		Eventually(started, time.Second).Should(BeClosed())
+
+		resetDone := make(chan struct{})
+		go func() {
+			bl.Reset()
+			close(resetDone)
+		}()
+
+		time.Sleep(15 * time.Millisecond)
+		close(release)
+
+		Eventually(resetDone, time.Second).Should(BeClosed())
+		Eventually(startDone, time.Second).Should(BeClosed())
 	})
 })

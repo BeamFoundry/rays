@@ -135,7 +135,11 @@ func (this *CronExpression) Next(from time.Time) time.Time {
 			continue
 		}
 		if this.hours&(uint64(1)<<t.Hour()) == 0 {
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
+			next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
+			if !next.After(t) {
+				next = t.Add(time.Duration(60-t.Minute())*time.Minute - time.Duration(t.Second())*time.Second)
+			}
+			t = next
 			continue
 		}
 		if this.minutes&(uint64(1)<<t.Minute()) == 0 {
@@ -266,8 +270,11 @@ func parseCronAtom(raw string, spec cronFieldSpec) (int, error) {
 
 func bitRange(start, end, step int) uint64 {
 	var mask uint64
-	for v := start; v <= end; v += step {
+	for v := start; ; v += step {
 		mask |= uint64(1) << v
+		if step > end-v {
+			break
+		}
 	}
 	return mask
 }

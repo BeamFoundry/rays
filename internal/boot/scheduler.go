@@ -53,6 +53,21 @@ func (this *TaskScheduler) HasTasks() bool {
 	return this.scheduler.HasTasks()
 }
 
+// InWorker reports whether the calling goroutine is currently executing a task in this scheduler.
+func (this *TaskScheduler) InWorker() bool {
+	return this.scheduler.InWorker()
+}
+
+// StartAsync transitions the scheduler to the started state and launches all queued tasks without blocking.
+func (this *TaskScheduler) StartAsync() bool {
+	return this.scheduler.StartAsync()
+}
+
+// Wait blocks until Stop is called and all active tasks finish.
+func (this *TaskScheduler) Wait() {
+	this.scheduler.Wait()
+}
+
 // Start launches all queued tasks and blocks until Stop is called and all active tasks finish.
 func (this *TaskScheduler) Start() {
 	this.scheduler.Start()

@@ -14,19 +14,25 @@ import (
 
 func newStartedScheduler(poolSize int) (s *scheduler.Scheduler, stop func()) {
 	sched := scheduler.NewScheduler(poolSize)
+	Expect(sched.StartAsync()).To(BeTrue())
+	done := make(chan struct{})
+	go func() {
+		sched.Wait()
+		close(done)
+	}()
+	return sched, func() {
+		sched.Stop()
+		Eventually(done, time.Second).Should(BeClosed())
+	}
+}
+
+func startScheduler(sched *scheduler.Scheduler) func() {
 	done := make(chan struct{})
 	go func() {
 		sched.Start()
 		close(done)
 	}()
-	// Schedule a sentinel task to guarantee Start() has transitioned to started before returning.
-	ready := make(chan struct{})
-	Expect(sched.LaunchTask(func() {
-		close(ready)
-	})).NotTo(HaveOccurred())
-	Eventually(ready, time.Second).Should(BeClosed())
-
-	return sched, func() {
+	return func() {
 		sched.Stop()
 		Eventually(done, time.Second).Should(BeClosed())
 	}
@@ -39,6 +45,7 @@ var _ = Describe("Scheduler", func() {
 			defer s.Stop()
 			Expect(s.PoolSize()).To(Equal(4))
 			Expect(s.HasTasks()).To(BeFalse())
+			Expect(s.InWorker()).To(BeFalse())
 		})
 
 		It("falls back to DefaultPoolSize when poolSize is zero or negative", func() {
@@ -51,12 +58,14 @@ var _ = Describe("Scheduler", func() {
 			Expect(sNeg.PoolSize()).To(Equal(scheduler.DefaultPoolSize))
 		})
 
-		It("queues tasks until Start is called, blocks Start until Stop, and handles Start after Stop", func() {
+		It("queues tasks until Start is called, blocks Start until Stop, reports InWorker, and rejects Schedule* after Start", func() {
 			s := scheduler.NewScheduler(2)
 			Expect(s.HasTasks()).To(BeFalse())
 
 			var ran atomic.Bool
+			var observedInWorker atomic.Bool
 			Expect(s.LaunchTask(func() {
+				observedInWorker.Store(s.InWorker())
 				ran.Store(true)
 			})).NotTo(HaveOccurred())
 			Expect(s.HasTasks()).To(BeTrue())
@@ -71,6 +80,13 @@ var _ = Describe("Scheduler", func() {
 				close(startDone1)
 			}()
 			Eventually(ran.Load, time.Second, 5*time.Millisecond).Should(BeTrue())
+			Expect(observedInWorker.Load()).To(BeTrue())
+			Expect(s.InWorker()).To(BeFalse())
+
+			// Recurring Schedule* calls are rejected once started
+			Expect(s.ScheduleCronTask(func() {}, "* * * * * *")).To(HaveOccurred())
+			Expect(s.ScheduleFixedRateTask(func() {}, "10ms")).To(HaveOccurred())
+			Expect(s.ScheduleFixedDelayTask(func() {}, "10ms")).To(HaveOccurred())
 
 			// Calling Start a second time while already running also blocks until Stop()
 			go func() {
@@ -84,7 +100,8 @@ var _ = Describe("Scheduler", func() {
 			Eventually(startDone1, time.Second).Should(BeClosed())
 			Eventually(startDone2, time.Second).Should(BeClosed())
 
-			// Start after Stop returns immediately
+			// Start / StartAsync after Stop return immediately
+			Expect(s.StartAsync()).To(BeFalse())
 			s.Start()
 		})
 
@@ -98,7 +115,9 @@ var _ = Describe("Scheduler", func() {
 			s.Stop()
 			s.Start()
 			Expect(ran.Load()).To(BeFalse())
-			Expect(scheduler.RunInPool(s, func() { ran.Store(true) })).To(BeFalse())
+			for range 64 {
+				Expect(scheduler.RunInPool(s, func() { ran.Store(true) })).To(BeFalse())
+			}
 			Expect(scheduler.Wait(s, 0)).To(BeFalse())
 			Expect(ran.Load()).To(BeFalse())
 		})
@@ -289,8 +308,7 @@ var _ = Describe("Scheduler", func() {
 
 	Context("ScheduleFixedRateTask", func() {
 		It("runs tasks repeatedly at a fixed rate between starts", func() {
-			s, cleanup := newStartedScheduler(2)
-			defer cleanup()
+			s := scheduler.NewScheduler(2)
 
 			var mu sync.Mutex
 			var starts []time.Time
@@ -301,6 +319,9 @@ var _ = Describe("Scheduler", func() {
 				mu.Unlock()
 				time.Sleep(15 * time.Millisecond)
 			}, "40ms")).NotTo(HaveOccurred())
+
+			cleanup := startScheduler(s)
+			defer cleanup()
 
 			Eventually(func() int {
 				mu.Lock()
@@ -320,8 +341,7 @@ var _ = Describe("Scheduler", func() {
 		})
 
 		It("honors initial delay and stops cleanly if stopped during initial delay or while waiting for pool", func() {
-			s, cleanup := newStartedScheduler(2)
-			start := time.Now()
+			s := scheduler.NewScheduler(2)
 			firstRun := make(chan time.Time, 1)
 
 			Expect(s.ScheduleFixedRateTask(func() {
@@ -331,35 +351,42 @@ var _ = Describe("Scheduler", func() {
 				}
 			}, "30ms", "40ms")).NotTo(HaveOccurred())
 
+			start := time.Now()
+			cleanup := startScheduler(s)
+
 			var ts time.Time
 			Eventually(firstRun, time.Second).Should(Receive(&ts))
 			Expect(ts.Sub(start)).To(BeNumerically(">=", 35*time.Millisecond))
 			cleanup()
 
 			// Stopped during initial delay
-			s2, cleanup2 := newStartedScheduler(1)
+			s2 := scheduler.NewScheduler(1)
 			var ran atomic.Bool
 			Expect(s2.ScheduleFixedRateTask(func() {
 				ran.Store(true)
 			}, "10ms", "5s")).NotTo(HaveOccurred())
+			cleanup2 := startScheduler(s2)
+			time.Sleep(15 * time.Millisecond)
 			cleanup2()
 			Expect(ran.Load()).To(BeFalse())
 
 			// Stopped while blocked on pool slot
-			s3, cleanup3 := newStartedScheduler(1)
+			s3 := scheduler.NewScheduler(1)
 			started := make(chan struct{})
 			release := make(chan struct{})
 			Expect(s3.LaunchTask(func() {
 				close(started)
 				<-release
 			})).NotTo(HaveOccurred())
-			Eventually(started, time.Second).Should(BeClosed())
 
 			var rateRan atomic.Bool
 			Expect(s3.ScheduleFixedRateTask(func() {
 				rateRan.Store(true)
-			}, "10ms")).NotTo(HaveOccurred())
-			time.Sleep(15 * time.Millisecond)
+			}, "10ms", "15ms")).NotTo(HaveOccurred())
+
+			cleanup3 := startScheduler(s3)
+			Eventually(started, time.Second).Should(BeClosed())
+			time.Sleep(30 * time.Millisecond)
 
 			stopDone := make(chan struct{})
 			go func() {
@@ -375,8 +402,7 @@ var _ = Describe("Scheduler", func() {
 
 	Context("ScheduleFixedDelayTask", func() {
 		It("waits the fixed delay after each task finishes before starting the next", func() {
-			s, cleanup := newStartedScheduler(2)
-			defer cleanup()
+			s := scheduler.NewScheduler(2)
 
 			type runSpan struct {
 				start time.Time
@@ -393,6 +419,9 @@ var _ = Describe("Scheduler", func() {
 				spans = append(spans, runSpan{start: st, end: en})
 				mu.Unlock()
 			}, "35ms")).NotTo(HaveOccurred())
+
+			cleanup := startScheduler(s)
+			defer cleanup()
 
 			Eventually(func() int {
 				mu.Lock()
@@ -412,8 +441,7 @@ var _ = Describe("Scheduler", func() {
 		})
 
 		It("honors initial delay and stops cleanly during initial delay or pool wait", func() {
-			s, cleanup := newStartedScheduler(2)
-			start := time.Now()
+			s := scheduler.NewScheduler(2)
 			firstRun := make(chan time.Time, 1)
 
 			Expect(s.ScheduleFixedDelayTask(func() {
@@ -423,35 +451,42 @@ var _ = Describe("Scheduler", func() {
 				}
 			}, "30ms", "40ms")).NotTo(HaveOccurred())
 
+			start := time.Now()
+			cleanup := startScheduler(s)
+
 			var ts time.Time
 			Eventually(firstRun, time.Second).Should(Receive(&ts))
 			Expect(ts.Sub(start)).To(BeNumerically(">=", 35*time.Millisecond))
 			cleanup()
 
 			// Stopped during initial delay
-			s2, cleanup2 := newStartedScheduler(1)
+			s2 := scheduler.NewScheduler(1)
 			var ran atomic.Bool
 			Expect(s2.ScheduleFixedDelayTask(func() {
 				ran.Store(true)
 			}, "10ms", "5s")).NotTo(HaveOccurred())
+			cleanup2 := startScheduler(s2)
+			time.Sleep(15 * time.Millisecond)
 			cleanup2()
 			Expect(ran.Load()).To(BeFalse())
 
 			// Stopped while blocked on pool slot
-			s3, cleanup3 := newStartedScheduler(1)
+			s3 := scheduler.NewScheduler(1)
 			started := make(chan struct{})
 			release := make(chan struct{})
 			Expect(s3.LaunchTask(func() {
 				close(started)
 				<-release
 			})).NotTo(HaveOccurred())
-			Eventually(started, time.Second).Should(BeClosed())
 
 			var delayRan atomic.Bool
 			Expect(s3.ScheduleFixedDelayTask(func() {
 				delayRan.Store(true)
-			}, "10ms")).NotTo(HaveOccurred())
-			time.Sleep(15 * time.Millisecond)
+			}, "10ms", "15ms")).NotTo(HaveOccurred())
+
+			cleanup3 := startScheduler(s3)
+			Eventually(started, time.Second).Should(BeClosed())
+			time.Sleep(30 * time.Millisecond)
 
 			stopDone := make(chan struct{})
 			go func() {
@@ -467,8 +502,7 @@ var _ = Describe("Scheduler", func() {
 
 	Context("ScheduleCronTask", func() {
 		It("executes tasks according to a 6-field cron schedule with seconds", func() {
-			s, cleanup := newStartedScheduler(2)
-			defer cleanup()
+			s := scheduler.NewScheduler(2)
 
 			base := time.Date(2026, time.March, 15, 10, 0, 0, 985000000, time.UTC)
 			var callCount atomic.Int32
@@ -488,34 +522,40 @@ var _ = Describe("Scheduler", func() {
 				runs.Add(1)
 			}, "* * * * * *")).NotTo(HaveOccurred())
 
+			cleanup := startScheduler(s)
+			defer cleanup()
+
 			Eventually(runs.Load, 2*time.Second, 5*time.Millisecond).Should(BeNumerically(">=", 2))
 			cleanup()
 		})
 
 		It("honors initial delay and stops cleanly during initial delay, cron wait, or pool wait", func() {
 			// 1. Stopped during initial delay
-			s1, cleanup1 := newStartedScheduler(1)
+			s1 := scheduler.NewScheduler(1)
 			var ran1 atomic.Bool
 			Expect(s1.ScheduleCronTask(func() {
 				ran1.Store(true)
 			}, "* * * * * *", "5s")).NotTo(HaveOccurred())
+			cleanup1 := startScheduler(s1)
+			time.Sleep(15 * time.Millisecond)
 			cleanup1()
 			Expect(ran1.Load()).To(BeFalse())
 
 			// 2. Stopped during cron wait after initial delay
-			s2, cleanup2 := newStartedScheduler(1)
+			s2 := scheduler.NewScheduler(1)
 			var ran2 atomic.Bool
 			Expect(s2.ScheduleCronTask(func() {
 				ran2.Store(true)
 			}, "0 0 0 1 1 *", "10ms")).NotTo(HaveOccurred())
+			cleanup2 := startScheduler(s2)
 			time.Sleep(25 * time.Millisecond)
 			cleanup2()
 			Expect(ran2.Load()).To(BeFalse())
 
 			// 3. Stopped while blocked waiting for a pool slot on a cron trigger
-			s3, cleanup3 := newStartedScheduler(1)
+			s3 := scheduler.NewScheduler(1)
 			scheduler.SetNowFunc(s3, func() time.Time {
-				return time.Date(2026, time.March, 15, 10, 0, 0, 995000000, time.UTC)
+				return time.Date(2026, time.March, 15, 10, 0, 0, 990000000, time.UTC)
 			})
 			started := make(chan struct{})
 			release := make(chan struct{})
@@ -523,13 +563,15 @@ var _ = Describe("Scheduler", func() {
 				close(started)
 				<-release
 			})).NotTo(HaveOccurred())
-			Eventually(started, time.Second).Should(BeClosed())
 
 			var cronRan atomic.Bool
 			Expect(s3.ScheduleCronTask(func() {
 				cronRan.Store(true)
-			}, "* * * * * *")).NotTo(HaveOccurred())
-			time.Sleep(25 * time.Millisecond)
+			}, "* * * * * *", "10ms")).NotTo(HaveOccurred())
+
+			cleanup3 := startScheduler(s3)
+			Eventually(started, time.Second).Should(BeClosed())
+			time.Sleep(35 * time.Millisecond)
 
 			stopDone := make(chan struct{})
 			go func() {

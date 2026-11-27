@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"reflect"
@@ -29,7 +30,7 @@ type Container struct {
 	cleanupDone chan struct{}
 	lock        sync.Mutex
 	runLock     sync.Mutex
-	initialized int32
+	initialized atomic.Int32
 	scanning    bool
 	// filterScan  func(pkgName string) bool
 }
@@ -80,7 +81,7 @@ func (this *Container) ConfigUnmarshall(path string, object any) Error {
 }
 
 func (this *Container) isInitialized() bool {
-	return atomic.CompareAndSwapInt32(&this.initialized, 1, 1)
+	return this.initialized.CompareAndSwap(1, 1)
 }
 
 func (this *Container) SetScanFor(rtype reflect.Type) {
@@ -352,7 +353,7 @@ func (this *Container) Initialize() Error {
 	}
 
 	// Set Initialized
-	atomic.StoreInt32(&this.initialized, 1)
+	this.initialized.Store(1)
 	return nil
 }
 
@@ -399,7 +400,20 @@ func (this *Container) initializeBeams(filter func(Beam) bool) {
 	}
 }
 
+// WrapLoggingHandler registers a wrapper function to decorate the active slog.Handler
+// before initialization completes. Calls after the container is initialized are ignored.
+func (this *Container) WrapLoggingHandler(wrapper func(slog.Handler) slog.Handler) {
+	if this.isInitialized() {
+		return
+	}
+	this.BootLoader.WrapLoggingHandler(wrapper)
+}
+
 func (this *Container) Reset() {
+	// Stop running tasks before acquiring Container.lock or resetting Registry so
+	// active tasks cannot deadlock against Reset or observe half-reset state.
+	this.Scheduler().Stop()
+
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.Registry.Reset()
@@ -409,7 +423,7 @@ func (this *Container) Reset() {
 	this.cleanupDone = nil
 	this.shutdownErr = nil
 	this.runLock.Unlock()
-	this.initialized = 0
+	this.initialized.Store(0)
 	this.scanning = false
 	this.scanfor = reflect.TypeFor[Stereotype]()
 }
@@ -432,6 +446,13 @@ func (this *Container) Run() {
 	this.shutdownErr = nil
 	this.runLock.Unlock()
 
+	// Start the scheduler synchronously before launching BeamRunners so recurring
+	// Schedule*Task calls are rejected and dynamic LaunchTask calls execute immediately.
+	// Only add Wait to wg when tasks were registered prior to Run().
+	sched := this.Scheduler()
+	hasTasks := sched.HasTasks()
+	sched.StartAsync()
+
 	var wg sync.WaitGroup
 	runner := reflect.TypeFor[BeamRunner]()
 
@@ -442,13 +463,8 @@ func (this *Container) Run() {
 		}
 	}
 
-	// Starting scheduler.
-	// Tasks are only registered during Container.Initialize() before Run() starts,
-	// so HasTasks() cannot race with tasks being added after Scheduler.Start().
-	if this.Scheduler().HasTasks() {
-		wg.Go(func() {
-			this.Scheduler().Start()
-		})
+	if hasTasks {
+		wg.Go(sched.Wait)
 	}
 
 	// Waiting for all runners in a goroutine so OS signals or Shutdown() can unblock Run()
@@ -484,6 +500,8 @@ func (this *Container) Run() {
 
 // Shutdown unblocks an active [Container.Run] call and waits for its teardown to complete,
 // or performs teardown directly if [Container.Run] is not active.
+// If invoked from inside a scheduler worker callback, Shutdown signals teardown and returns
+// immediately so [Scheduler.Stop] can wait for the callback to finish without deadlocking.
 func (this *Container) Shutdown() Error {
 	this.runLock.Lock()
 	done := this.cleanupDone
@@ -493,6 +511,9 @@ func (this *Container) Shutdown() Error {
 			this.shutdownCh = nil
 		}
 		this.runLock.Unlock()
+		if this.Scheduler().InWorker() {
+			return nil
+		}
 		<-done
 		this.runLock.Lock()
 		err := this.shutdownErr

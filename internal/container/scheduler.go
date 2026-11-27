@@ -119,12 +119,12 @@ func parseScheduledTag(tag reflect.StructTag) (scheduledSpec, Error) {
 		}
 		key := remaining[:colonIdx]
 		rest := remaining[colonIdx+2:]
-		endQuote := strings.IndexByte(rest, '"')
-		if endQuote < 0 {
+		before, after, ok := strings.Cut(rest, "\"")
+		if !ok {
 			return scheduledSpec{}, NewError("InitializationError", "Invalid Scheduled struct tag syntax", "tag", string(tag))
 		}
-		val := rest[:endQuote]
-		remaining = strings.TrimSpace(rest[endQuote+1:])
+		val := before
+		remaining = strings.TrimSpace(after)
 
 		switch key {
 		case "cron":

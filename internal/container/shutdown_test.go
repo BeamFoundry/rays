@@ -2,6 +2,7 @@ package container_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -365,7 +366,127 @@ var _ = Describe("Container Shutdown", func() {
 		Expect(GetContainer().Shutdown()).NotTo(HaveOccurred())
 		Eventually(runDone, time.Second).Should(BeClosed())
 	})
+
+	It("allows WrapLoggingHandler during PostConstruct and ignores calls after Initialize completes", func() {
+		var postConstructCalls, postInitCalls atomic.Int32
+		beam := &wrapInPostConstructBeam{calls: &postConstructCalls}
+		_, err := GetContainer().AddBeamFor(beam)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		GetContainer().WrapLoggingHandler(func(next slog.Handler) slog.Handler {
+			postInitCalls.Add(1)
+			return next
+		})
+
+		GetContainer().Logger().Info("probe wrapper")
+		Expect(postConstructCalls.Load()).To(BeNumerically(">=", int32(1)))
+		Expect(postInitCalls.Load()).To(Equal(int32(0)))
+	})
+
+	It("allows a scheduled callback to request Shutdown without deadlocking Scheduler.Stop", func() {
+		var mu sync.Mutex
+		var events []string
+		beam := &scheduledShutdownBeam{mu: &mu, events: &events}
+		_, err := GetContainer().AddBeamFor(beam)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		runDone := make(chan struct{})
+		go func() {
+			GetContainer().Run()
+			close(runDone)
+		}()
+
+		Eventually(runDone, time.Second).Should(BeClosed())
+		Expect(beam.shutdownErr).NotTo(HaveOccurred())
+
+		mu.Lock()
+		Expect(events).To(Equal([]string{"CallbackBeforeReturn", "PreDestroy", "Shutdown"}))
+		mu.Unlock()
+	})
+
+	It("marks scheduler started even with no scheduled tasks, rejecting Schedule* and running LaunchTask during Run", func() {
+		runner := &runtimeSchedulerRunnerBeam{}
+		_, err := GetContainer().AddBeamFor(runner)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(GetContainer().Initialize()).NotTo(HaveOccurred())
+
+		GetContainer().Run()
+		Expect(runner.scheduleErr).To(HaveOccurred())
+		Expect(runner.launchErr).NotTo(HaveOccurred())
+		Expect(runner.launchedRan.Load()).To(BeTrue())
+	})
 })
+
+type scheduledShutdownBeam struct {
+	Service
+	IgnoreScanning
+	mu          *sync.Mutex
+	events      *[]string
+	shutdownErr Error
+}
+
+func (this *scheduledShutdownBeam) TriggerShutdown(
+	_ struct {
+		Scheduled
+	},
+) {
+	this.shutdownErr = GetContainer().Shutdown()
+	time.Sleep(20 * time.Millisecond)
+	this.mu.Lock()
+	*this.events = append(*this.events, "CallbackBeforeReturn")
+	this.mu.Unlock()
+}
+
+func (this *scheduledShutdownBeam) PreDestroy() Error {
+	this.mu.Lock()
+	*this.events = append(*this.events, "PreDestroy")
+	this.mu.Unlock()
+	return nil
+}
+
+func (this *scheduledShutdownBeam) Shutdown() Error {
+	this.mu.Lock()
+	*this.events = append(*this.events, "Shutdown")
+	this.mu.Unlock()
+	return nil
+}
+
+type runtimeSchedulerRunnerBeam struct {
+	Component
+	IgnoreScanning
+	scheduleErr error
+	launchErr   error
+	launchedRan atomic.Bool
+}
+
+func (this *runtimeSchedulerRunnerBeam) Run(wg *sync.WaitGroup) {
+	wg.Go(func() {
+		sched := container.GetContainer().Scheduler()
+		this.scheduleErr = sched.ScheduleTask(func() {}, container.ScheduleType{}.New().FIXED_RATE, "10ms")
+		done := make(chan struct{})
+		this.launchErr = sched.LaunchTask(func() {
+			this.launchedRan.Store(true)
+			close(done)
+		})
+		<-done
+	})
+}
+
+type wrapInPostConstructBeam struct {
+	Component
+	IgnoreScanning
+	calls *atomic.Int32
+}
+
+func (this *wrapInPostConstructBeam) PostConstruct() Error {
+	GetContainer().WrapLoggingHandler(func(next slog.Handler) slog.Handler {
+		this.calls.Add(1)
+		return next
+	})
+	return nil
+}
 
 type stuckRunnerBeam struct {
 	Component

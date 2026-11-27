@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/timandy/routine"
 )
 
 const (
@@ -23,20 +24,22 @@ const (
 
 // Scheduler manages concurrent task execution within a fixed-size worker pool,
 // supporting one-shot, delayed, cron, fixed-rate, and fixed-delay tasks.
-// Tasks registered before [Scheduler.Start] is called are validated immediately
-// and queued until [Scheduler.Start] begins execution.
+// Recurring tasks (CRON, FIXED_RATE, FIXED_DELAY) must be registered before
+// [Scheduler.Start] or [Scheduler.StartAsync] is called; one-shot [Scheduler.LaunchTask]
+// calls are queued before start and executed immediately once started.
 type Scheduler struct {
-	sem      chan struct{}
-	stopCh   chan struct{}
-	now      func() time.Time
-	logger   atomic.Pointer[logger.Logger]
-	pending  []func()
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	poolSize int
-	started  bool
-	stopped  bool
-	hasTasks bool
+	workerLocal routine.ThreadLocal[bool]
+	sem         chan struct{}
+	stopCh      chan struct{}
+	now         func() time.Time
+	logger      atomic.Pointer[logger.Logger]
+	pending     []func()
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	poolSize    int
+	started     bool
+	stopped     bool
+	hasTasks    bool
 }
 
 // NewScheduler creates a new Scheduler with a fixed concurrency pool of poolSize.
@@ -46,10 +49,11 @@ func NewScheduler(poolSize int) *Scheduler {
 		poolSize = DefaultPoolSize
 	}
 	return &Scheduler{
-		sem:      make(chan struct{}, poolSize),
-		stopCh:   make(chan struct{}),
-		now:      time.Now,
-		poolSize: poolSize,
+		workerLocal: routine.NewThreadLocal[bool](),
+		sem:         make(chan struct{}, poolSize),
+		stopCh:      make(chan struct{}),
+		now:         time.Now,
+		poolSize:    poolSize,
 	}
 }
 
@@ -71,17 +75,18 @@ func (this *Scheduler) HasTasks() bool {
 	return this.hasTasks
 }
 
-// Start launches all queued tasks and blocks until [Scheduler.Stop] is called
-// and all active tasks have finished. Calling Start on an already started scheduler
-// waits until Stop completes. Calling Start after Stop returns immediately.
-//
-// In container-managed lifecycles, all tasks are registered during Container.Initialize()
-// before Start is called, so tasks are never added concurrently after Start begins.
-func (this *Scheduler) Start() {
+// InWorker reports whether the calling goroutine is currently executing a task in this scheduler.
+func (this *Scheduler) InWorker() bool {
+	return this.workerLocal.Get()
+}
+
+// StartAsync transitions the scheduler to the started state and launches all queued tasks
+// without blocking. Returns false if the scheduler has already been stopped.
+func (this *Scheduler) StartAsync() bool {
 	this.mu.Lock()
+	defer this.mu.Unlock()
 	if this.stopped {
-		this.mu.Unlock()
-		return
+		return false
 	}
 	if !this.started {
 		this.started = true
@@ -95,10 +100,23 @@ func (this *Scheduler) Start() {
 			}(fn)
 		}
 	}
-	this.mu.Unlock()
+	return true
+}
 
+// Wait blocks until [Scheduler.Stop] is called and all active tasks have finished.
+func (this *Scheduler) Wait() {
 	<-this.stopCh
 	this.wg.Wait()
+}
+
+// Start launches all queued tasks and blocks until [Scheduler.Stop] is called
+// and all active tasks have finished. Calling Start on an already started scheduler
+// waits until Stop completes. Calling Start after Stop returns immediately.
+func (this *Scheduler) Start() {
+	if !this.StartAsync() {
+		return
+	}
+	this.Wait()
 }
 
 // Stop signals all scheduled and pending tasks to stop and waits for active tasks to finish
@@ -116,6 +134,7 @@ func (this *Scheduler) Stop() {
 
 // ScheduleCronTask schedules task according to a 6-field cron expression starting with seconds.
 // An optional initialDelay ([time.ParseDuration] string) may be provided to wait before evaluating the schedule.
+// Must be called before [Scheduler.Start] or [Scheduler.StartAsync].
 func (this *Scheduler) ScheduleCronTask(task func(), expr string, initialDelay ...string) error {
 	if task == nil {
 		return errors.New(errTaskNil)
@@ -128,13 +147,14 @@ func (this *Scheduler) ScheduleCronTask(task func(), expr string, initialDelay .
 	if err != nil {
 		return err
 	}
-	return this.startGoroutine(func() {
+	return this.enqueueScheduled(func() {
 		this.runCron(task, parsed, delay)
 	})
 }
 
 // ScheduleFixedRateTask schedules task to run repeatedly with rate ([time.ParseDuration] string)
 // between two starts of the task. An optional initialDelay may be provided.
+// Must be called before [Scheduler.Start] or [Scheduler.StartAsync].
 func (this *Scheduler) ScheduleFixedRateTask(task func(), rate string, initialDelay ...string) error {
 	if task == nil {
 		return errors.New(errTaskNil)
@@ -147,13 +167,14 @@ func (this *Scheduler) ScheduleFixedRateTask(task func(), rate string, initialDe
 	if err != nil {
 		return err
 	}
-	return this.startGoroutine(func() {
+	return this.enqueueScheduled(func() {
 		this.runFixedRate(task, interval, delay)
 	})
 }
 
 // ScheduleFixedDelayTask schedules task to run repeatedly with delay ([time.ParseDuration] string)
 // between the end of one execution and the start of the next. An optional initialDelay may be provided.
+// Must be called before [Scheduler.Start] or [Scheduler.StartAsync].
 func (this *Scheduler) ScheduleFixedDelayTask(task func(), delay string, initialDelay ...string) error {
 	if task == nil {
 		return errors.New(errTaskNil)
@@ -166,7 +187,7 @@ func (this *Scheduler) ScheduleFixedDelayTask(task func(), delay string, initial
 	if err != nil {
 		return err
 	}
-	return this.startGoroutine(func() {
+	return this.enqueueScheduled(func() {
 		this.runFixedDelay(task, waitDelay, initDelay)
 	})
 }
@@ -181,7 +202,7 @@ func (this *Scheduler) LaunchTask(task func(), initialDelay ...string) error {
 	if err != nil {
 		return err
 	}
-	return this.startGoroutine(func() {
+	return this.enqueueLaunch(func() {
 		if !this.wait(delay) {
 			return
 		}
@@ -189,7 +210,21 @@ func (this *Scheduler) LaunchTask(task func(), initialDelay ...string) error {
 	})
 }
 
-func (this *Scheduler) startGoroutine(fn func()) error {
+func (this *Scheduler) enqueueScheduled(fn func()) error {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	if this.stopped {
+		return errors.New("scheduler is stopped")
+	}
+	if this.started {
+		return errors.New("scheduler is already started")
+	}
+	this.hasTasks = true
+	this.pending = append(this.pending, fn)
+	return nil
+}
+
+func (this *Scheduler) enqueueLaunch(fn func()) error {
 	this.mu.Lock()
 	if this.stopped {
 		this.mu.Unlock()
@@ -276,9 +311,6 @@ func (this *Scheduler) isStopped() bool {
 }
 
 func (this *Scheduler) runInPool(task func()) bool {
-	if this.isStopped() {
-		return false
-	}
 	select {
 	case <-this.stopCh:
 		return false
@@ -286,11 +318,17 @@ func (this *Scheduler) runInPool(task func()) bool {
 	}
 	defer func() { <-this.sem }()
 
+	if this.isStopped() {
+		return false
+	}
+
 	this.executeTask(task)
 	return true
 }
 
 func (this *Scheduler) executeTask(task func()) {
+	this.workerLocal.Set(true)
+	defer this.workerLocal.Remove()
 	defer func() {
 		if r := recover(); r != nil {
 			stack := string(debug.Stack())
