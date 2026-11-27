@@ -4,9 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/BeamFoundry/rays/internal/boot"
 	"github.com/BeamFoundry/rays/internal/services"
@@ -14,17 +18,27 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
+const defaultShutdownTimeout = 30 * time.Second
+
 type Container struct {
 	*boot.BootLoader
 	*Registry
 	scanfor     reflect.Type
+	shutdownErr Error
+	shutdownCh  chan struct{}
+	cleanupDone chan struct{}
 	lock        sync.Mutex
+	runLock     sync.Mutex
 	initialized int32
 	scanning    bool
 	// filterScan  func(pkgName string) bool
 }
 
-var _ ContainerConfiguration = &Container{}
+var (
+	_                   ContainerConfiguration = &Container{}
+	notifySignalContext                        = signal.NotifyContext
+	shutdownTimeout                            = defaultShutdownTimeout
+)
 
 var _container = &Container{
 	BootLoader: boot.NewBootLoader(),
@@ -332,6 +346,12 @@ func (this *Container) Initialize() Error {
 	}
 
 	services.Get().Logger.Info("All beam initialized")
+	// Look for Scheduled tasks.
+	if err := this.registerScheduledTasks(); err != nil {
+		return err
+	}
+
+	// Set Initialized
 	atomic.StoreInt32(&this.initialized, 1)
 	return nil
 }
@@ -384,12 +404,34 @@ func (this *Container) Reset() {
 	defer this.lock.Unlock()
 	this.Registry.Reset()
 	this.BootLoader.Reset()
+	this.runLock.Lock()
+	this.shutdownCh = nil
+	this.cleanupDone = nil
+	this.shutdownErr = nil
+	this.runLock.Unlock()
 	this.initialized = 0
 	this.scanning = false
 	this.scanfor = reflect.TypeFor[Stereotype]()
 }
 
 func (this *Container) Run() {
+	if !this.isInitialized() {
+		services.Get().Logger.Error("Container is not initialized, aborting Run()")
+		return
+	}
+
+	ctx, stopSignals := notifySignalContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	shutdownCh := make(chan struct{})
+	cleanupDone := make(chan struct{})
+
+	this.runLock.Lock()
+	this.shutdownCh = shutdownCh
+	this.cleanupDone = cleanupDone
+	this.shutdownErr = nil
+	this.runLock.Unlock()
+
 	var wg sync.WaitGroup
 	runner := reflect.TypeFor[BeamRunner]()
 
@@ -400,17 +442,78 @@ func (this *Container) Run() {
 		}
 	}
 
-	wg.Wait()
-	//nolint:errcheck // Errors are already logged inside Shutdown
-	_ = this.Shutdown()
+	// Starting scheduler.
+	// Tasks are only registered during Container.Initialize() before Run() starts,
+	// so HasTasks() cannot race with tasks being added after Scheduler.Start().
+	if this.Scheduler().HasTasks() {
+		wg.Go(func() {
+			this.Scheduler().Start()
+		})
+	}
+
+	// Waiting for all runners in a goroutine so OS signals or Shutdown() can unblock Run()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-shutdownCh:
+	}
+
+	err := this.cleanup()
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelWait()
+	select {
+	case <-done:
+	case <-waitCtx.Done():
+		services.Get().Logger.Warn("Container shutdown timed out waiting for runners to exit")
+	}
+
+	this.runLock.Lock()
+	this.shutdownErr = err
+	this.shutdownCh = nil
+	this.cleanupDone = nil
+	this.runLock.Unlock()
+	close(cleanupDone)
 }
 
-// Shutdown invokes [BeamPreDestroy.PreDestroy] on all initialized singleton Beams whose concrete instance implements it.
+// Shutdown unblocks an active [Container.Run] call and waits for its teardown to complete,
+// or performs teardown directly if [Container.Run] is not active.
 func (this *Container) Shutdown() Error {
+	this.runLock.Lock()
+	done := this.cleanupDone
+	if done != nil {
+		if this.shutdownCh != nil {
+			close(this.shutdownCh)
+			this.shutdownCh = nil
+		}
+		this.runLock.Unlock()
+		<-done
+		this.runLock.Lock()
+		err := this.shutdownErr
+		this.runLock.Unlock()
+		return err
+	}
+	this.runLock.Unlock()
+
+	return this.cleanup()
+}
+
+// cleanup stops the scheduler and then invokes [BeamPreDestroy.PreDestroy] followed by
+// [BeamShutdown.Shutdown] on all initialized singleton Beams.
+func (this *Container) cleanup() Error {
+	this.Scheduler().Stop()
+
 	var firstErr Error
 	singleton := BeamScope{}.New().SINGLETON
 	initialized := InstanceStatus{}.New().INITIALIZED
 
+	var initializedSingletons []any
 	for _, beam := range this.GetAllBeams() {
 		if beam.Scope() != singleton {
 			continue
@@ -419,8 +522,23 @@ func (this *Container) Shutdown() Error {
 		if instance == nil || instance.Status().Compare(initialized) < 0 {
 			continue
 		}
-		if pd, ok := instance.Get().(BeamPreDestroy); ok {
+		initializedSingletons = append(initializedSingletons, instance.Get())
+	}
+
+	for _, obj := range initializedSingletons {
+		if pd, ok := obj.(BeamPreDestroy); ok {
 			if err := pd.PreDestroy(); err != nil {
+				err.LogError()
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+
+	for _, obj := range initializedSingletons {
+		if sd, ok := obj.(BeamShutdown); ok {
+			if err := sd.Shutdown(); err != nil {
 				err.LogError()
 				if firstErr == nil {
 					firstErr = err

@@ -146,13 +146,15 @@ func (m *MetricsWorker) Run(wg *sync.WaitGroup) {
 }
 ```
 
-## Phase 4: Shutdown (`BeamPreDestroy`)
+## Phase 4: Shutdown (`BeamPreDestroy` and `BeamShutdown`)
 
-Singleton Beams that hold resources requiring graceful cleanup (such as telemetry exporters, connection pools, or background buffers) can implement the `BeamPreDestroy` interface in `pkg/core`:
+When `ctx.Run()` receives a termination signal (`SIGINT` / `SIGTERM`), finishes all `BeamRunner`s, or is stopped via `TestingContext.Shutdown()` in tests, Rays performs teardown in the following order:
 
-* **`BeamPreDestroy`**: `PreDestroy() Error` — invoked on all initialized singleton Beams when `ctx.Shutdown()` is called, and automatically at the end of `ctx.Run()` after all `BeamRunner`s exit.
+1. **Scheduler Stop**: Stops the task scheduler, waiting for any in-flight tasks to complete without starting new ones.
+2. **`BeamPreDestroy`**: `PreDestroy() Error` — invoked on all initialized singleton Beams to flush pending work and release resources.
+3. **`BeamShutdown`**: `Shutdown() Error` — invoked on all initialized singleton Beams after `PreDestroy()` hooks have completed.
 
-Prototype Beams and uninitialized singletons are skipped. If multiple Beams return an error from `PreDestroy()`, all remaining Beams still run their cleanup, each error is logged, and the first error is returned by `Shutdown()`.
+Prototype Beams and uninitialized singletons are skipped. If multiple Beams return an error from `PreDestroy()` or `Shutdown()`, all remaining Beams still run their cleanup and each error is logged.
 
 ```go
 import (

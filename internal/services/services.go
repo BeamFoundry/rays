@@ -4,11 +4,13 @@ import (
 	"sync/atomic"
 
 	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/BeamFoundry/rays/internal/boot/scheduler"
 )
 
 // Registry holds references to cross-cutting services initialized during boot.
 type Registry struct {
-	Logger *logger.Logger
+	Logger    *logger.Logger
+	Scheduler *scheduler.Scheduler
 }
 
 var current atomic.Pointer[Registry]
@@ -29,9 +31,10 @@ func Register(r *Registry) {
 	}
 }
 
-// Reset restores the default registry with a fallback Logger.
+// Reset restores the default registry with a fallback Logger and Scheduler.
 func Reset() {
 	current.Store(&Registry{
-		Logger: logger.NewLogger(),
+		Logger:    logger.NewLogger(),
+		Scheduler: scheduler.NewScheduler(scheduler.DefaultPoolSize),
 	})
 }

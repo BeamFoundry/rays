@@ -60,6 +60,8 @@ type TestingContext interface {
 	Register(beam Beam) Error
 	// EnableScanning() must be called in testing to activate component scanning.
 	EnableScanning()
+	// Shutdown() stops a running container or runs teardown hooks (Scheduler.Stop, BeamPreDestroy, BeamShutdown).
+	Shutdown() Error
 }
 
 func GetContainer() TestingContext {

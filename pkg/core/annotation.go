@@ -253,3 +253,30 @@ type Server interface {
 	BeamAttribute
 	_Server()
 }
+
+// Scheduled is a marker interface for scheduling task
+//
+// It must be placed in an anonymous struct as first and only argument of a [Stereotype]d [Singleton] Beam method with no return,
+// to define a scheduled or launched task.
+//
+// When used it may be tagged with at most one of "fixedRate", "fixedDelay" or "cron".
+// If none of these tags is specified, the task is launched once in the scheduler pool (LaunchTask).
+//
+// For "fixedRate" or "fixedDelay" a time.ParseDuration compatible argument must be provided.
+//
+// For "cron" a cron format with a "second" field added in front to a typical cron format so that the field orders are :
+//
+//   - second
+//   - minute
+//   - hour
+//   - day of month
+//   - month
+//   - day of week
+//
+// Ranges, steps, lists, named months/weekdays, ?, Sunday as 7, and calendar-date are supported.
+//
+// It can also have an "initialDelay" tag containing a time.ParseDuration compatible argument which indicates a delay before starting
+// scheduling or launching that task. No other struct tags are permitted on [Scheduled].
+type Scheduled interface {
+	_Scheduled()
+}

@@ -8,10 +8,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"reflect"
+	"sync/atomic"
 	"testing/fstest"
+	"time"
 
 	"github.com/BeamFoundry/rays/internal/boot"
 	"github.com/BeamFoundry/rays/internal/boot/logger"
+	"github.com/BeamFoundry/rays/internal/boot/scheduler"
 	"github.com/BeamFoundry/rays/internal/services"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	"github.com/BeamFoundry/rays/pkg/lang"
@@ -53,9 +56,13 @@ var _ = Describe("BootLoader", func() {
 		bl.Reset()
 	})
 
-	It("creates a BootLoader with default quiet logger and default config", func() {
+	It("creates a BootLoader with default quiet logger, scheduler, and default config", func() {
 		Expect(bl).NotTo(BeNil())
 		Expect(bl.Logger()).NotTo(BeNil())
+		Expect(bl.Scheduler()).NotTo(BeNil())
+		Expect(bl.Scheduler().PoolSize()).To(Equal(scheduler.DefaultPoolSize))
+		Expect(services.Get().Scheduler).NotTo(BeNil())
+		Expect(services.Get().Scheduler.PoolSize()).To(Equal(scheduler.DefaultPoolSize))
 		Expect(bl.Config).NotTo(BeNil())
 		Expect(bl.LoggerForType(reflect.TypeFor[*DummyStruct]())).NotTo(BeNil())
 	})
@@ -70,6 +77,12 @@ var _ = Describe("BootLoader", func() {
 		Expect(bl.LoggingProperties().AddSource()).To(BeTrue())
 		Expect(bl.LoggingProperties().Format()).To(Equal(logger.DefaultFormat))
 		Expect(bl.LoggingProperties().MapLevels()).To(BeEmpty())
+		Expect(bl.SchedulerProperties()).NotTo(BeNil())
+		Expect(bl.SchedulerProperties().Pool()).To(Equal(scheduler.DefaultPoolSize))
+		Expect(bl.Scheduler()).NotTo(BeNil())
+		Expect(bl.Scheduler().PoolSize()).To(Equal(scheduler.DefaultPoolSize))
+		Expect(services.Get().Scheduler).NotTo(BeNil())
+		Expect(services.Get().Scheduler.PoolSize()).To(Equal(scheduler.DefaultPoolSize))
 	})
 
 	It("can boot with custom logging properties and package-specific loggers", func() {
@@ -245,11 +258,87 @@ var _ = Describe("BootLoader", func() {
 		Expect(wrappedCalls).To(BeNumerically(">=", 1))
 	})
 
-	It("can reset properly and restore standard-library default logger", func() {
+	It("can boot with custom scheduler pool size", func() {
+		cfg := map[string]any{
+			"pool": 4,
+		}
+		Expect(bl.LoadConfigAt(cfg, "rays.scheduler")).NotTo(HaveOccurred())
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		Expect(bl.SchedulerProperties()).NotTo(BeNil())
+		Expect(bl.SchedulerProperties().Pool()).To(Equal(4))
+		Expect(bl.Scheduler().PoolSize()).To(Equal(4))
+		Expect(services.Get().Scheduler).NotTo(BeNil())
+		Expect(services.Get().Scheduler.PoolSize()).To(Equal(4))
+	})
+
+	It("returns error when scheduler properties unmarshal fails", func() {
+		cfg := map[string]any{
+			"pool": 0,
+		}
+		Expect(bl.LoadConfigAt(cfg, "rays.scheduler")).NotTo(HaveOccurred())
+		err := bl.Boot()
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("can reset properly and restore standard-library default logger and scheduler", func() {
+		Expect(bl.LoadConfigAt(map[string]any{"pool": 3}, "rays.scheduler")).NotTo(HaveOccurred())
 		Expect(bl.Boot()).NotTo(HaveOccurred())
 		bootedDefault := slog.Default()
+		bootedRegistryScheduler := services.Get().Scheduler
+		Expect(bl.Scheduler().PoolSize()).To(Equal(3))
+
 		bl.Reset()
 		Expect(bl.LoggingProperties()).To(BeNil())
+		Expect(bl.SchedulerProperties()).To(BeNil())
 		Expect(slog.Default()).NotTo(Equal(bootedDefault))
+		Expect(services.Get().Scheduler).NotTo(Equal(bootedRegistryScheduler))
+		Expect(bl.Scheduler().PoolSize()).To(Equal(scheduler.DefaultPoolSize))
+		Expect(services.Get().Scheduler.PoolSize()).To(Equal(scheduler.DefaultPoolSize))
+	})
+
+	It("proxies task scheduling and launching through TaskScheduler", func() {
+		Expect(bl.Boot()).NotTo(HaveOccurred())
+		ts := bl.Scheduler()
+		Expect(ts.HasTasks()).To(BeFalse())
+
+		startDone := make(chan struct{})
+		go func() {
+			ts.Start()
+			close(startDone)
+		}()
+		defer func() {
+			ts.Stop()
+			Eventually(startDone, time.Second).Should(BeClosed())
+		}()
+
+		var launched atomic.Bool
+		Expect(ts.LaunchTask(func() {
+			launched.Store(true)
+		})).NotTo(HaveOccurred())
+		Expect(ts.HasTasks()).To(BeTrue())
+		Eventually(launched.Load, time.Second, 5*time.Millisecond).Should(BeTrue())
+
+		var delayed atomic.Bool
+		Expect(ts.LaunchTaskWithInitialDelay(func() {
+			delayed.Store(true)
+		}, "15ms")).NotTo(HaveOccurred())
+		Eventually(delayed.Load, time.Second, 5*time.Millisecond).Should(BeTrue())
+
+		var rateRuns atomic.Int32
+		Expect(ts.ScheduleTask(func() {
+			rateRuns.Add(1)
+		}, boot.ScheduleTypes.FIXED_RATE, "20ms")).NotTo(HaveOccurred())
+		Eventually(rateRuns.Load, time.Second, 5*time.Millisecond).Should(BeNumerically(">=", 2))
+
+		var delayRuns atomic.Int32
+		Expect(ts.ScheduleTaskWithInitialDelay(func() {
+			delayRuns.Add(1)
+		}, boot.ScheduleTypes.FIXED_DELAY, "20ms", "10ms")).NotTo(HaveOccurred())
+		Eventually(delayRuns.Load, time.Second, 5*time.Millisecond).Should(BeNumerically(">=", 2))
+
+		Expect(ts.ScheduleTask(func() {}, boot.ScheduleTypes.CRON, "0 0 0 1 1 *")).NotTo(HaveOccurred())
+		Expect(ts.ScheduleTask(func() {}, boot.ScheduleType{}, "10ms")).To(HaveOccurred())
+		Expect(ts.ScheduleTaskWithInitialDelay(func() {}, boot.ScheduleTypes.FIXED_RATE, "10ms", "invalid")).To(HaveOccurred())
+		Expect(ts.LaunchTask(nil)).To(HaveOccurred())
 	})
 })
